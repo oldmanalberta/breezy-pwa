@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no">
+<title>Breezy</title>
+
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="stylesheet" href="./css/app.css">
+
+<!-- iOS home-screen behaviour -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Breezy">
+<link rel="apple-touch-icon" href="./icons/icon-180.png">
+<meta name="theme-color" content="#1b2a4a">
+</head>
+<body>
+
+<!-- animated sky sits behind everything -->
+<div id="sky" class="sky"><canvas id="fx"></canvas></div>
+
+<main id="app">
+  <header class="hero" id="hero">
+    <div class="hero-bar">
+      <button class="icon-btn" id="btn-places" aria-label="Locations">
+        <svg viewBox="0 0 24 24"><path d="M12 2a7 7 0 0 0-7 7c0 5.25 7 13 7 13s7-7.75 7-13a7 7 0 0 0-7-7zm0 9.5A2.5 2.5 0 1 1 12 6.5a2.5 2.5 0 0 1 0 5z"/></svg>
+      </button>
+      <div class="hero-place">
+        <h1 id="place-name">—</h1>
+        <p id="place-sub">Loading…</p>
+      </div>
+      <button class="icon-btn" id="btn-settings" aria-label="Settings">
+        <svg viewBox="0 0 24 24"><path d="M12 15.5A3.5 3.5 0 1 1 15.5 12 3.5 3.5 0 0 1 12 15.5zm7.43-2.53a7.7 7.7 0 0 0 0-1.94l2.03-1.58a.5.5 0 0 0 .12-.63l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.3 7.3 0 0 0-1.68-.97l-.36-2.54a.5.5 0 0 0-.49-.42h-3.84a.5.5 0 0 0-.49.42l-.36 2.54a7.3 7.3 0 0 0-1.68.97l-2.39-.96a.5.5 0 0 0-.6.22L2.42 8.82a.5.5 0 0 0 .12.63l2.03 1.58a7.7 7.7 0 0 0 0 1.94l-2.03 1.58a.5.5 0 0 0-.12.63l1.92 3.32a.5.5 0 0 0 .6.22l2.39-.96a7.3 7.3 0 0 0 1.68.97l.36 2.54a.5.5 0 0 0 .49.42h3.84a.5.5 0 0 0 .49-.42l.36-2.54a7.3 7.3 0 0 0 1.68-.97l2.39.96a.5.5 0 0 0 .6-.22l1.92-3.32a.5.5 0 0 0-.12-.63z"/></svg>
+      </button>
+    </div>
+
+    <div class="hero-main">
+      <div class="hero-icon" id="hero-icon"></div>
+      <div class="hero-temp" id="hero-temp">--<span class="deg">°</span></div>
+      <div class="hero-cond" id="hero-cond">—</div>
+      <div class="hero-range" id="hero-range"></div>
+    </div>
+
+    <div class="scroll-cue" id="scroll-cue">
+      <svg viewBox="0 0 24 24"><path d="M7.4 8.6 12 13.2l4.6-4.6L18 10l-6 6-6-6z"/></svg>
+    </div>
+  </header>
+
+  <section class="sheet" id="sheet">
+    <div id="cards"></div>
+    <footer class="attrib">
+      <p id="source-line">—</p>
+      <p class="tiny">Breezy PWA · a personal build inspired by Breezy Weather</p>
+    </footer>
+  </section>
+</main>
+
+<!-- ── Locations panel ─────────────────────────────── -->
+<div class="scrim" id="scrim"></div>
+
+<aside class="panel" id="panel-places" aria-hidden="true">
+  <div class="panel-head">
+    <h2>Locations</h2>
+    <button class="icon-btn" data-close aria-label="Close">
+      <svg viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+    </button>
+  </div>
+  <div class="search-row">
+    <input id="search-input" type="search" placeholder="Search city…" autocomplete="off" enterkeyhint="search">
+    <button class="pill" id="btn-locate">Use my location</button>
+  </div>
+  <div id="search-results" class="results"></div>
+  <h3 class="panel-sub">Saved</h3>
+  <div id="saved-list" class="results"></div>
+</aside>
+
+<aside class="panel" id="panel-settings" aria-hidden="true">
+  <div class="panel-head">
+    <h2>Settings</h2>
+    <button class="icon-btn" data-close aria-label="Close">
+      <svg viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+    </button>
+  </div>
+  <div class="setting">
+    <label>Temperature</label>
+    <div class="seg" id="seg-unit">
+      <button data-v="C" class="on">°C</button><button data-v="F">°F</button>
+    </div>
+  </div>
+  <div class="setting">
+    <label>Wind speed</label>
+    <div class="seg" id="seg-wind">
+      <button data-v="kmh" class="on">km/h</button><button data-v="ms">m/s</button><button data-v="mph">mph</button>
+    </div>
+  </div>
+  <div class="setting">
+    <label>Weather source</label>
+    <div class="seg col" id="seg-source">
+      <button data-v="auto" class="on">Automatic <em>ECCC in Canada, else Open-Meteo</em></button>
+      <button data-v="eccc">Environment and Climate Change Canada <em>Government of Canada · Canada only</em></button>
+      <button data-v="openmeteo">Open-Meteo <em>Worldwide · multi-model</em></button>
+      <button data-v="gem">Open-Meteo · Canadian GEM <em>ECCC model, worldwide coverage</em></button>
+    </div>
+  </div>
+  <div class="setting">
+    <label>Animated background</label>
+    <div class="seg" id="seg-fx">
+      <button data-v="on" class="on">On</button><button data-v="off">Off</button>
+    </div>
+  </div>
+  <p class="tiny pad">Data © Environment and Climate Change Canada (Open Government Licence – Canada) and Open-Meteo (CC BY 4.0).</p>
+</aside>
+
+<!-- ── Radar (full screen, built by js/radar.js) ───── -->
+<div class="radar" id="radar" aria-hidden="true"></div>
+
+<div id="toast" class="toast"></div>
+
+<script type="module" src="./js/app.js"></script>
+</body>
+</html>

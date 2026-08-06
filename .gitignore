@@ -1,0 +1,13 @@
+# OS / editor cruft
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store
+*.swp
+*~
+.vscode/
+.idea/
+
+# Python bytecode from tools/
+__pycache__/
+*.pyc
