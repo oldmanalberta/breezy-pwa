@@ -15,6 +15,8 @@ const HOURLY = [
 const DAILY = [
   'weather_code', 'temperature_2m_max', 'temperature_2m_min', 'sunrise', 'sunset',
   'uv_index_max', 'precipitation_probability_max', 'precipitation_sum', 'wind_speed_10m_max',
+  'apparent_temperature_max', 'apparent_temperature_min', 'sunshine_duration',
+  'wind_gusts_10m_max', 'wind_direction_10m_dominant',
 ].join(',');
 
 const CURRENT = [
@@ -41,25 +43,39 @@ const AQI_CATS = [
   [200, 'Unhealthy'], [300, 'Very unhealthy'], [Infinity, 'Hazardous'],
 ];
 
-async function fetchAir(lat, lon) {
+export const aqiCategory = (v) => AQI_CATS.find(([t]) => v <= t)[1];
+
+/* Current air quality, plus a per-day peak AQI for the daily panel.
+   The air-quality API has no daily block, so bucket the hourly series. */
+async function fetchAir(lat, lon, tz) {
   try {
     const d = await j(`${AQ}?latitude=${lat}&longitude=${lon}` +
       `&current=us_aqi,pm2_5,pm10,ozone,nitrogen_dioxide,sulphur_dioxide` +
-      `&timeformat=unixtime&timezone=UTC`);
+      `&hourly=us_aqi&timeformat=unixtime&timezone=${encodeURIComponent(tz || 'auto')}`);
     const c = d.current ?? {};
-    if (c.us_aqi == null) return null;
+
+    const dailyMax = new Map();
+    const ht = d.hourly?.time ?? [], hv = d.hourly?.us_aqi ?? [];
+    for (let i = 0; i < ht.length; i++) {
+      if (hv[i] == null) continue;
+      const key = D(ht[i]).toDateString();
+      dailyMax.set(key, Math.max(dailyMax.get(key) ?? -Infinity, hv[i]));
+    }
+
+    if (c.us_aqi == null) return { dailyMax };
     const v = Math.round(c.us_aqi);
     return {
       scale: 'AQI',
       index: v,
       max: 300,
-      category: AQI_CATS.find(([t]) => v <= t)[1],
+      category: aqiCategory(v),
       station: '',
       time: D(c.time),
       pollutants: {
         'PM2.5': c.pm2_5, 'PM10': c.pm10, 'O₃': c.ozone,
         'NO₂': c.nitrogen_dioxide, 'SO₂': c.sulphur_dioxide,
       },
+      dailyMax,
     };
   } catch { return null; }
 }
@@ -74,7 +90,7 @@ export async function fetchOpenMeteo({ lat, lon, tz, model = null }) {
   });
   if (model) params.set('models', model);
 
-  const [d, air] = await Promise.all([j(`${FC}?${params}`), fetchAir(lat, lon)]);
+  const [d, air] = await Promise.all([j(`${FC}?${params}`), fetchAir(lat, lon, tz)]);
 
   const c = d.current ?? {};
   const isNight = c.is_day === 0;
@@ -120,6 +136,12 @@ export async function fetchOpenMeteo({ lat, lon, tz, model = null }) {
       precip: at(DD.precipitation_sum, i),
       uv: at(DD.uv_index_max, i),
       wind: at(DD.wind_speed_10m_max, i),
+      gust: at(DD.wind_gusts_10m_max, i),
+      windDir: at(DD.wind_direction_10m_dominant, i),
+      feelsHi: at(DD.apparent_temperature_max, i),
+      feelsLo: at(DD.apparent_temperature_min, i),
+      sunshine: at(DD.sunshine_duration, i) != null ? at(DD.sunshine_duration, i) / 3600 : null,
+      aqi: air?.dailyMax?.get(date?.toDateString()) ?? null,
       sunrise: D(at(DD.sunrise, i)),
       sunset: D(at(DD.sunset, i)),
     };

@@ -20,12 +20,18 @@ account, and no 7-day expiry.
 
 - **Condition-driven sky** — the background gradient and animated effects (rain,
   snow, stars, drifting cloud, fog) change with the weather and time of day.
-- **Cards** — hourly forecast with temperature curve, 7–10 day forecast with
-  range bars, details grid, air quality, sun & moon with arc and moon phase.
+- **Daily panel** — horizontally scrolling day columns with a chart across
+  them, and pills to switch what the chart plots: Conditions, Precipitation,
+  Wind, UV index, Air quality, Feels like, Sunshine.
+- **Cards** — hourly forecast with temperature curve, details grid, air
+  quality, sun & moon with arc and moon phase. Reorderable from Settings.
 - **Precipitation radar** — ECCC's North American 1 km radar composite over a
   pannable, zoomable map. A card shows the latest frame centred on your
   location; tap it for the full-screen map with a 12-frame animation covering
   roughly the last 70 minutes, a scrub slider, and the official ECCC legend.
+  Playback is held until every frame has downloaded, so the animation never
+  runs through blank frames. Base map follows the app theme or can be pinned
+  to light or dark.
 - **Weather alerts** — active ECCC warnings and watches, colour-coded by risk,
   tap to expand the full bulletin.
 - **Canadian AQHI** — the actual Air Quality Health Index Canadians use, not a
@@ -123,13 +129,18 @@ network first, so a reload picks up changes immediately.
 ## Running it locally
 
 ```bash
-python -m http.server 8712
+python tools/serve.py
 ```
 
 Then open `http://localhost:8712`. Service workers and geolocation are allowed
 on `localhost` without HTTPS, so everything works. Note that visiting the same
 server from your phone by LAN IP will *not* let you install it — that needs
 HTTPS, which is why hosting matters.
+
+Use `tools/serve.py` rather than `python -m http.server`: the stock server
+sends no cache headers, so browsers hold on to stale ES modules and an edited
+file keeps reporting the *old* module's exports. This one sends `no-store` and
+fixes a couple of MIME types.
 
 To regenerate the app icons after changing the artwork in `tools/make_icons.py`:
 
@@ -164,6 +175,7 @@ js/sources/index.js     source dispatcher and fallback logic
 js/sources/eccc.js      Environment and Climate Change Canada adapter
 js/sources/openmeteo.js Open-Meteo adapter and geocoding
 tools/make_icons.py     icon generator (standard library only)
+tools/serve.py          dev server with caching disabled
 ```
 
 ## Credits and licensing

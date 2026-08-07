@@ -2,7 +2,7 @@
 
 import { icon } from './icons.js';
 import { state } from './store.js';
-import { radarAvailable, staticMapSpec } from './radar.js';
+import { radarAvailable, staticMapSpec, mapIsDark } from './radar.js';
 
 /* ── formatting ───────────────────────────────────── */
 export const toF = (c) => (c * 9) / 5 + 32;
@@ -108,39 +108,170 @@ export function hourlyCard(data) {
     </div>`);
 }
 
-/* ── daily ────────────────────────────────────────── */
-export function dailyCard(data) {
-  const days = (data.daily ?? []).filter((d) => d.hi != null || d.lo != null).slice(0, 10);
+/* ── daily ────────────────────────────────────────────
+   A horizontally scrolling panel of day columns with a chart drawn across
+   them, and pills to switch which series the chart shows — the shape Breezy
+   Weather uses. Every mode reuses one renderer; a mode just declares how to
+   pull its numbers out of a day and how to label them. */
+
+const COL = 74;          // px per day column
+const CHART_H = 132;     // px of chart between the day and night icons
+
+export const DAILY_MODES = {
+  conditions: {
+    label: 'Conditions',
+    kind: 'range',
+    hi: (d) => d.hi, lo: (d) => d.lo,
+    fmt: (v) => temp(v),
+    icons: true,
+  },
+  precipitation: {
+    label: 'Precipitation',
+    kind: 'bar',
+    val: (d) => d.precip,
+    alt: (d) => d.pop,
+    fmt: (v) => (v >= 10 ? Math.round(v) : Math.round(v * 10) / 10) + ' mm',
+    altFmt: (v) => Math.round(v) + '%',
+    colour: '#5aa9e6',
+  },
+  wind: {
+    label: 'Wind',
+    kind: 'bar',
+    val: (d) => d.wind,
+    alt: (d) => d.gust,
+    fmt: (v) => windVal(v) + ' ' + windUnit(),
+    altFmt: (v) => 'gust ' + windVal(v),
+    colour: '#7fb3ea',
+  },
+  uv: {
+    label: 'UV index',
+    kind: 'bar',
+    val: (d) => d.uv,
+    fmt: (v) => String(Math.round(v)),
+    colour: '#f5b823',
+  },
+  air: {
+    label: 'Air quality',
+    kind: 'bar',
+    val: (d) => d.aqi,
+    fmt: (v) => String(Math.round(v)),
+    colour: '#3ec46d',
+  },
+  feels: {
+    label: 'Feels like',
+    kind: 'range',
+    hi: (d) => d.feelsHi, lo: (d) => d.feelsLo,
+    fmt: (v) => temp(v),
+  },
+  sunshine: {
+    label: 'Sunshine',
+    kind: 'bar',
+    val: (d) => d.sunshine,
+    fmt: (v) => (Math.round(v * 10) / 10) + ' h',
+    colour: '#ffc44d',
+  },
+};
+
+const hasData = (mode, days) => days.some((d) =>
+  mode.kind === 'range' ? mode.hi(d) != null || mode.lo(d) != null : mode.val(d) != null);
+
+/* two stacked curves with value labels — used by Conditions and Feels like */
+function rangeChart(days, mode, W) {
+  const vals = days.flatMap((d) => [mode.hi(d), mode.lo(d)]).filter((v) => v != null);
+  if (!vals.length) return '';
+  const max = Math.max(...vals), min = Math.min(...vals);
+  const span = Math.max(max - min, 1);
+  const padT = 24, padB = 24;
+  const y = (v) => padT + (1 - (v - min) / span) * (CHART_H - padT - padB);
+  const x = (i) => i * COL + COL / 2;
+
+  const line = (get, cls, dy) => {
+    const pts = days.map((d, i) => (get(d) == null ? null : `${x(i)},${y(get(d)).toFixed(1)}`))
+                    .filter(Boolean).join(' ');
+    if (!pts) return '';
+    const labels = days.map((d, i) => get(d) == null ? '' :
+      `<text x="${x(i)}" y="${(y(get(d)) + dy).toFixed(1)}" text-anchor="middle"
+         font-size="13.5" font-weight="600" fill="currentColor">${esc(mode.fmt(get(d)))}</text>`).join('');
+    return `<polyline points="${pts}" fill="none" stroke="var(--accent-ink)" stroke-width="2.5"
+              stroke-linecap="round" stroke-linejoin="round" class="${cls}"/>${labels}`;
+  };
+
+  return `<svg class="dp-chart" width="${W}" height="${CHART_H}" viewBox="0 0 ${W} ${CHART_H}">
+      ${line(mode.hi, 'dp-hi', -9)}
+      ${line(mode.lo, 'dp-lo', 17)}
+    </svg>`;
+}
+
+/* simple column chart with a value label above each bar */
+function barChart(days, mode, W) {
+  const vals = days.map(mode.val).filter((v) => v != null);
+  if (!vals.length) return '';
+  const max = Math.max(...vals, 0.001);
+  const padT = 26, padB = 20, base = CHART_H - padB;
+
+  const bars = days.map((d, i) => {
+    const v = mode.val(d);
+    if (v == null) return '';
+    const h = Math.max((v / max) * (CHART_H - padT - padB), v > 0 ? 3 : 0);
+    const cx = i * COL + COL / 2;
+    const alt = mode.alt?.(d);
+    return `
+      <rect x="${cx - 11}" y="${(base - h).toFixed(1)}" width="22" height="${h.toFixed(1)}"
+            rx="5" fill="${mode.colour}" opacity=".85"/>
+      <text x="${cx}" y="${(base - h - 8).toFixed(1)}" text-anchor="middle"
+            font-size="12.5" font-weight="600" fill="currentColor">${esc(mode.fmt(v))}</text>
+      ${alt != null && alt > 0 ? `<text x="${cx}" y="${base + 14}" text-anchor="middle"
+            font-size="11" font-weight="600" fill="var(--on-surface-var)">${esc(mode.altFmt(alt))}</text>` : ''}`;
+  }).join('');
+
+  return `<svg class="dp-chart" width="${W}" height="${CHART_H}" viewBox="0 0 ${W} ${CHART_H}">${bars}</svg>`;
+}
+
+export function dailyCard(data, modeKey = 'conditions') {
+  const days = (data.daily ?? []).slice(0, 10);
   if (!days.length) return '';
 
-  const his = days.map((d) => d.hi).filter((v) => v != null);
-  const los = days.map((d) => d.lo).filter((v) => v != null);
-  const gMax = Math.max(...his, ...los), gMin = Math.min(...los, ...his);
-  const gSpan = Math.max(gMax - gMin, 1);
+  const available = Object.entries(DAILY_MODES).filter(([, m]) => hasData(m, days));
+  if (!available.length) return '';
+  const key = available.some(([k]) => k === modeKey) ? modeKey : available[0][0];
+  const mode = DAILY_MODES[key];
+
+  const W = days.length * COL;
   const today = new Date().toDateString();
 
-  const rows = days.map((d, i) => {
-    const lo = d.lo ?? d.hi, hi = d.hi ?? d.lo;
-    const left = ((lo - gMin) / gSpan) * 100;
-    const width = Math.max(((hi - lo) / gSpan) * 100, 6);
+  const heads = days.map((d) => {
     const isToday = d.date && d.date.toDateString() === today;
     const name = d.label ?? (isToday ? 'Today' : dayLabel(d.date, data.tz));
-    return `
-      <div class="day-row" data-day="${i}">
-        <div class="dn">${esc(name)}<em>${d.date ? dateLabel(d.date, data.tz) : ''}${
-          d.pop != null && d.pop > 5 ? ` · <b>${Math.round(d.pop)}%</b>` : ''}</em></div>
-        <div class="di" title="${esc(d.text)}">${icon(d.condition, d.night)}</div>
-        <div class="lo">${d.lo != null ? temp(d.lo) : ''}</div>
-        <div class="bar"><i style="left:${left.toFixed(1)}%;width:${width.toFixed(1)}%"></i></div>
-        <div class="hi">${d.hi != null ? temp(d.hi) : ''}</div>
+    return `<div class="dp-col">
+        <b>${esc(name)}</b>
+        <em>${d.date ? dateLabel(d.date, data.tz) : ''}</em>
+        <span class="dp-ico" title="${esc(d.text)}">${icon(d.condition, false)}</span>
       </div>`;
   }).join('');
 
-  const summary = days[0]?.summary
-    ? `<p style="margin:0 0 12px;font-size:13.5px;line-height:1.5;color:var(--on-surface-var)">${esc(days[0].summary)}</p>`
-    : '';
+  const feet = days.map((d) => `<div class="dp-col">
+      ${mode.icons ? `<span class="dp-ico dim">${icon(d.condition, true)}</span>` : ''}
+      ${d.pop != null && d.pop > 5 ? `<span class="dp-pop">${Math.round(d.pop)}%</span>` : '<span class="dp-pop"></span>'}
+    </div>`).join('');
 
-  return card(`${days.length}-day forecast`, G.cal, summary + rows);
+  const chart = mode.kind === 'range' ? rangeChart(days, mode, W) : barChart(days, mode, W);
+
+  const pills = available.map(([k, m]) =>
+    `<button class="dp-pill${k === key ? ' on' : ''}" data-daily-mode="${k}">${esc(m.label)}</button>`).join('');
+
+  const summary = days[0]?.summary
+    ? `<p class="dp-summary">${esc(days[0].summary)}</p>` : '';
+
+  return card(`${days.length}-day forecast`, G.cal, `
+    ${summary}
+    <div class="dp-pills">${pills}</div>
+    <div class="dp-scroll">
+      <div style="width:${W}px">
+        <div class="dp-row">${heads}</div>
+        ${chart}
+        <div class="dp-row">${feet}</div>
+      </div>
+    </div>`);
 }
 
 /* ── details grid ─────────────────────────────────── */
@@ -206,8 +337,7 @@ export function radarCard(data) {
   // Card is roughly 16:10 at the sheet's inner width; 360×225 is close enough
   // and the browser scales the result to fit.
   const W = 360, H = 225;
-  const dark = !window.matchMedia('(prefers-color-scheme: light)').matches;
-  const spec = staticMapSpec(lat, lon, W, H, 6, dark);
+  const spec = staticMapSpec(lat, lon, W, H, 6, mapIsDark());
 
   const tiles = spec.tiles.map((t) =>
     `<img class="rd-base" src="${t.url}" alt="" loading="lazy" style="
@@ -270,8 +400,33 @@ export function sunCard(data) {
     </div>`);
 }
 
-export function renderCards(data) {
-  return [alertsCard, hourlyCard, radarCard, dailyCard, detailsCard, airCard, sunCard]
-    .map((f) => { try { return f(data); } catch (e) { console.warn('card failed', f.name, e); return ''; } })
-    .join('');
+/* ── card assembly ────────────────────────────────── */
+
+/* Alerts are deliberately not in here: a severe weather warning always belongs
+   at the top, so it is not something the reorder UI can bury. */
+export const CARDS = {
+  hourly:  { label: 'Hourly forecast',      fn: hourlyCard },
+  radar:   { label: 'Precipitation radar',  fn: radarCard },
+  daily:   { label: 'Daily forecast',       fn: (d, o) => dailyCard(d, o.dailyMode) },
+  details: { label: 'Details',              fn: detailsCard },
+  air:     { label: 'Air quality',          fn: airCard },
+  sun:     { label: 'Sun & moon',           fn: sunCard },
+};
+
+export const DEFAULT_ORDER = ['hourly', 'radar', 'daily', 'details', 'air', 'sun'];
+
+export function normalizeOrder(order) {
+  const seen = new Set();
+  const out = (Array.isArray(order) ? order : []).filter((k) => CARDS[k] && !seen.has(k) && seen.add(k));
+  for (const k of DEFAULT_ORDER) if (!seen.has(k)) out.push(k);   // pick up newly added cards
+  return out;
+}
+
+export function renderCards(data, opts = {}) {
+  const order = normalizeOrder(opts.order);
+  const safe = (fn) => {
+    try { return fn(data, opts) ?? ''; }
+    catch (e) { console.warn('card failed', e); return ''; }
+  };
+  return safe(alertsCard) + order.map((k) => safe(CARDS[k].fn)).join('');
 }

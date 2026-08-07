@@ -6,7 +6,7 @@ import { geocode, flagOf } from './sources/openmeteo.js';
 import { icon, sky, fxKind } from './icons.js';
 import { startFx, stopFx } from './fx.js';
 import { createRadar } from './radar.js';
-import { renderCards, temp, timeLabel } from './render.js';
+import { renderCards, temp, timeLabel, CARDS, DEFAULT_ORDER, normalizeOrder } from './render.js';
 
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => Array.from(document.querySelectorAll(s));
@@ -113,7 +113,10 @@ function paint(data, place, stale = false) {
 
   data.tz = place.tz;
   data.coords = { lat: place.lat, lon: place.lon };
-  $('#cards').innerHTML = renderCards(data);
+  $('#cards').innerHTML = renderCards(data, {
+    dailyMode: state.dailyMode,
+    order: state.order ?? DEFAULT_ORDER,
+  });
 
   const srcBits = [data.source.name];
   if (data.supplement) srcBits.push(`+ ${data.supplement}`);
@@ -181,15 +184,47 @@ function renderSaved() {
   list.innerHTML = state.places.map((p) => {
     const wx = readCache(p.id, 24 * 3600e3);
     const t = wx?.data?.current?.temp;
-    return `<div class="res" data-place="${p.id}">
+    const active = p.id === state.activeId;
+    return `<div class="res${active ? ' active' : ''}" data-place="${p.id}">
       <span class="flag">${p.current ? '📍' : flagOf(p.cc)}</span>
       <span class="rn"><b>${p.name}</b><span>${p.admin ?? ''}</span></span>
       <span class="rt">${t != null ? temp(t) : ''}</span>
-      <button class="del" data-del="${p.id}" aria-label="Remove">
+      <button class="del" data-del="${p.id}" aria-label="Delete ${p.name}" title="Delete">
         <svg viewBox="0 0 24 24"><path d="M6 19a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7H6zM19 4h-3.5l-1-1h-5l-1 1H5v2h14z"/></svg>
       </button>
     </div>`;
   }).join('');
+}
+
+/* ── settings: card order ─────────────────────────── */
+function renderOrder() {
+  const box = $('#order-list');
+  if (!box) return;
+  const order = normalizeOrder(state.order ?? DEFAULT_ORDER);
+  box.innerHTML = order.map((k, i) => `
+    <div class="ord" data-key="${k}">
+      <span class="ord-name">${CARDS[k].label}</span>
+      <button class="ord-btn" data-move="up" data-i="${i}" ${i === 0 ? 'disabled' : ''} aria-label="Move up">
+        <svg viewBox="0 0 24 24"><path d="M12 8l6 6H6z"/></svg>
+      </button>
+      <button class="ord-btn" data-move="down" data-i="${i}" ${i === order.length - 1 ? 'disabled' : ''} aria-label="Move down">
+        <svg viewBox="0 0 24 24"><path d="M12 16l-6-6h12z"/></svg>
+      </button>
+    </div>`).join('');
+}
+
+function moveCard(i, dir) {
+  const order = normalizeOrder(state.order ?? DEFAULT_ORDER);
+  const j = i + (dir === 'up' ? -1 : 1);
+  if (j < 0 || j >= order.length) return;
+  [order[i], order[j]] = [order[j], order[i]];
+  set('order', order);
+  renderOrder();
+  if (current) {
+    const y = window.scrollY;
+    paint(current, activePlace());
+    window.scrollTo(0, y);
+  }
 }
 
 let searchTimer;
@@ -250,12 +285,14 @@ function wire() {
     const btn = e.target.closest('[data-add]');
     if (!btn) return;
     const p = JSON.parse(btn.dataset.add);
+    const isNew = !state.places.some((x) => x.id === p.id);
     addPlace(p);
     current = null;
     $('#search-input').value = '';
     $('#search-results').innerHTML = '';
     closePanels();
     renderSaved();
+    toast(isNew ? `Saved ${p.name}` : `Switched to ${p.name}`);
     refresh();
   });
 
@@ -263,9 +300,14 @@ function wire() {
     const del = e.target.closest('[data-del]');
     if (del) {
       e.stopPropagation();
-      removePlace(del.dataset.del);
+      const id = del.dataset.del;
+      const place = state.places.find((p) => p.id === id);
+      // deleting a saved place is easy to hit by accident on a phone
+      if (!window.confirm(`Delete ${place?.name ?? 'this location'}?`)) return;
+      removePlace(id);
       renderSaved();
       current = null;
+      toast(`Deleted ${place?.name ?? 'location'}`);
       if (state.places.length) refresh(); else showEmpty();
       return;
     }
@@ -277,12 +319,25 @@ function wire() {
     refresh();
   });
 
-  // expandable alert text + radar launcher
+  // expandable alert text, daily series pills, radar launcher
   $('#cards').addEventListener('click', (e) => {
     const a = e.target.closest('.alert');
     if (a) { a.classList.toggle('open'); return; }
+
+    const pill = e.target.closest('[data-daily-mode]');
+    if (pill) {
+      set('dailyMode', pill.dataset.dailyMode);
+      // repaint just the daily card so the page doesn't jump back to the top
+      const scroll = window.scrollY;
+      if (current) paint(current, activePlace());
+      window.scrollTo(0, scroll);
+      return;
+    }
+
     if (e.target.closest('[data-open-radar]')) openRadar();
   });
+
+  $('#radar').addEventListener('radar-toast', (e) => toast(e.detail));
 
   // route the close button through history so it matches the back gesture
   $('#radar').addEventListener('radar-close', () => {
@@ -306,6 +361,13 @@ function wire() {
   seg('#seg-wind', 'wind', () => current && paint(current, activePlace()));
   seg('#seg-source', 'source', () => { current = null; refresh(); });
   seg('#seg-fx', 'fx', () => current && startFx($('#fx'), fxKind(current.current.condition), state.fx === 'on'));
+  seg('#seg-maptheme', 'mapTheme', () => { if (current) paint(current, activePlace()); });
+
+  renderOrder();
+  $('#order-list').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-move]');
+    if (b && !b.disabled) moveCard(Number(b.dataset.i), b.dataset.move);
+  });
 
   $('#scroll-cue').addEventListener('click', () =>
     $('#sheet').scrollIntoView({ behavior: 'smooth' }));
@@ -315,17 +377,28 @@ function wire() {
     if (!document.hidden && current && Date.now() - current.updated > 10 * 60e3) refresh({ silent: true });
   });
 
-  // pull-to-refresh at the very top of the hero
-  let y0 = null;
+  /* Pull-to-refresh, deliberately hard to trigger by accident.
+     The first version fired on any downward swipe past 110px while scrollY
+     was 0, so simply scrolling back up to the hero re-fetched the forecast
+     over and over. It now needs a long pull that both starts and ends pinned
+     at the very top, with a cooldown so a flick can't chain refreshes. */
+  const PULL_PX = 150;
+  const PULL_COOLDOWN = 20000;
+  let y0 = null, lastPull = 0;
+
   window.addEventListener('touchstart', (e) => {
-    y0 = window.scrollY <= 0 ? e.touches[0].clientY : null;
+    y0 = window.scrollY === 0 && e.touches.length === 1 ? e.touches[0].clientY : null;
   }, { passive: true });
+
   window.addEventListener('touchend', (e) => {
-    if (y0 !== null && e.changedTouches[0].clientY - y0 > 110 && window.scrollY <= 0) {
-      toast('Refreshing…', 1200);
-      refresh({ silent: true });
-    }
+    const start = y0;
     y0 = null;
+    if (start === null || window.scrollY !== 0) return;
+    if (e.changedTouches[0].clientY - start < PULL_PX) return;
+    if (busy || Date.now() - lastPull < PULL_COOLDOWN) return;
+    lastPull = Date.now();
+    toast('Updating forecast…', 1400);
+    refresh({ silent: true });
   }, { passive: true });
 }
 

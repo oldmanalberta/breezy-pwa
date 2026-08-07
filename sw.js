@@ -1,7 +1,7 @@
-/* Service worker: cache the app shell so Breezy opens instantly and works
+﻿/* Service worker: cache the app shell so Breezy opens instantly and works
    offline (the last forecast is kept separately in localStorage). */
 
-const VERSION = 'breezy-v2';
+const VERSION = 'breezy-v3';
 const SHELL = [
   './',
   './index.html',

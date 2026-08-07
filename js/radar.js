@@ -10,6 +10,8 @@
  * which avoids tiling the WMS and keeps it to one request per layer per frame.
  */
 
+import { state, set } from './store.js';
+
 const GEOMET = 'https://geo.weather.gc.ca/geomet';
 const RAIN = 'RADAR_1KM_RRAI';
 const SNOW = 'RADAR_1KM_RSNO';
@@ -54,6 +56,12 @@ export const legendUrl = (layer = RAIN) =>
 
 export const baseTileUrl = (x, y, z, dark) =>
   `https://basemaps.cartocdn.com/${dark ? 'dark_all' : 'light_all'}/${z}/${x}/${y}.png`;
+
+/* Resolve the map's light/dark choice: an explicit setting, else the OS theme. */
+export const mapIsDark = () =>
+  state.mapTheme === 'dark' ? true
+  : state.mapTheme === 'light' ? false
+  : !window.matchMedia('(prefers-color-scheme: light)').matches;
 
 /* Everything needed to draw a non-interactive w×h map centred on a point:
    the base tiles with their offsets, plus radar images for that exact bbox.
@@ -106,7 +114,7 @@ export function createRadar(host, { lat, lon, tz }) {
   let z = 7;
   let cx = lonToWorld(lon, z), cy = latToWorld(lat, z);   // centre, world px
   let W = 0, H = 0;
-  let frames = [], idx = 0, playing = false, timer = null, loadedFor = null;
+  let frames = [], idx = 0, playing = false, timer = null, loadedFor = null, ready = false;
 
   host.innerHTML = `
     <div class="rd-map" id="rd-map">
@@ -123,8 +131,15 @@ export function createRadar(host, { lat, lon, tz }) {
     <div class="rd-zoom">
       <button data-rd="in" aria-label="Zoom in">+</button>
       <button data-rd="out" aria-label="Zoom out">&minus;</button>
+      <button data-rd="theme" aria-label="Map theme" title="Map theme">
+        <svg viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 0 18zm0 2.2v13.6a6.8 6.8 0 0 1 0-13.6z"/></svg>
+      </button>
     </div>
     <div class="rd-bottom">
+      <div class="rd-loading" id="rd-loading" hidden>
+        <span class="rd-loadtext">Loading radar…</span>
+        <span class="rd-loadbar"><i class="rd-loadfill"></i></span>
+      </div>
       <div class="rd-controls">
         <button class="rd-play" data-rd="play" aria-label="Play animation">
           <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
@@ -148,7 +163,7 @@ export function createRadar(host, { lat, lon, tz }) {
   const slider = host.querySelector('#rd-slider');
   const playBtn = host.querySelector('.rd-play');
 
-  const dark = () => !window.matchMedia('(prefers-color-scheme: light)').matches;
+  const dark = mapIsDark;
 
   /* ── base tiles ── */
   function drawTiles() {
@@ -196,11 +211,30 @@ export function createRadar(host, { lat, lon, tz }) {
   /* ── radar frames ── */
   function frameKey() { return `${z}|${Math.round(cx)}|${Math.round(cy)}|${Math.round(W)}x${Math.round(H)}`; }
 
+  /* Every frame is two WMS images (rain + snow). Animation must not start until
+     they have all arrived, otherwise Play runs through blank frames that look
+     like "no precipitation" rather than "not downloaded yet". */
   function drawFrames() {
     const key = frameKey();
     if (key === loadedFor || !frames.length || !W) return;
     loadedFor = key;
+
     const bbox = currentBbox();
+    const total = frames.length * 2;
+    let done = 0;
+    ready = false;
+    if (playing) stop();
+    updateLoading(0, total);
+
+    const settled = () => {
+      done++;
+      updateLoading(done, total);
+      if (done >= total) {
+        ready = true;
+        updateLoading(total, total);
+      }
+    };
+
     frameLayer.innerHTML = '';
     frames.forEach((t, i) => {
       const iso = t.toISOString().replace(/\.\d+Z$/, 'Z');
@@ -209,12 +243,32 @@ export function createRadar(host, { lat, lon, tz }) {
       g.style.opacity = i === idx ? '1' : '0';
       for (const layer of [RAIN, SNOW]) {
         const img = new Image();
-        img.src = wmsUrl(layer, bbox, W, H, iso);
         img.alt = '';
+        // count errors too, or one dead tile would stall the loader forever
+        img.addEventListener('load', settled, { once: true });
+        img.addEventListener('error', settled, { once: true });
+        img.src = wmsUrl(layer, bbox, W, H, iso);
         g.appendChild(img);
       }
       frameLayer.appendChild(g);
     });
+  }
+
+  function updateLoading(done, total) {
+    const bar = host.querySelector('#rd-loading');
+    if (!bar) return;
+    if (done >= total) {
+      bar.hidden = true;
+      playBtn.disabled = false;
+      playBtn.removeAttribute('aria-disabled');
+      return;
+    }
+    bar.hidden = false;
+    bar.querySelector('.rd-loadtext').textContent =
+      `Loading radar… ${Math.round((done / total) * 100)}%`;
+    bar.querySelector('.rd-loadfill').style.width = `${(done / total) * 100}%`;
+    playBtn.disabled = true;
+    playBtn.setAttribute('aria-disabled', 'true');
   }
 
   function showFrame(i) {
@@ -352,7 +406,7 @@ export function createRadar(host, { lat, lon, tz }) {
     playBtn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>';
   }
   function play() {
-    if (frames.length < 2) return;
+    if (frames.length < 2 || !ready) return;
     playing = true;
     playBtn.classList.add('on');
     playBtn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M6 5h4v14H6zm8 0h4v14h-4z"/></svg>';
@@ -368,6 +422,15 @@ export function createRadar(host, { lat, lon, tz }) {
     if (act === 'in')  { setZoom(z + 1); deferFrames(); }
     if (act === 'out') { setZoom(z - 1); deferFrames(); }
     if (act === 'play') { playing ? stop() : play(); }
+    if (act === 'theme') {
+      const next = { auto: 'light', light: 'dark', dark: 'auto' }[state.mapTheme] ?? 'auto';
+      set('mapTheme', next);
+      host.dispatchEvent(new CustomEvent('radar-toast', {
+        bubbles: true, detail: `Map: ${next}${next === 'auto' ? ' (follows theme)' : ''}`,
+      }));
+      tileLayer.innerHTML = '';
+      drawTiles();
+    }
     if (act === 'legend') {
       const box = host.querySelector('#rd-legendbox');
       box.hidden = !box.hidden;

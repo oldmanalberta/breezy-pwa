@@ -8,7 +8,10 @@ const DEFAULTS = {
   wind: 'kmh',
   source: 'auto',
   fx: 'on',
-  places: [],       // [{id,name,admin,cc,lat,lon,tz,current?:bool}]
+  mapTheme: 'auto',        // radar base map: auto | light | dark
+  dailyMode: 'conditions', // which series the daily panel charts
+  order: null,             // card order; null means the default arrangement
+  places: [],              // [{id,name,admin,cc,lat,lon,tz,current?:bool}]
   activeId: null,
 };
 
