@@ -101,10 +101,15 @@ function paint(data, place, stale = false) {
   $('#hero-temp').innerHTML = `${temp(c.temp, false)}<span class="deg">°</span>`;
   $('#hero-cond').textContent = c.text || '—';
 
+  /* Assemble only the parts that exist. Opened in the evening, ECCC's first
+     forecast block is "Tonight", which carries a low but no daytime high —
+     rendering that as "H --°" looks broken rather than simply absent. */
   const d0 = data.daily?.[0];
-  $('#hero-range').textContent = d0 && (d0.hi != null || d0.lo != null)
-    ? `H ${temp(d0.hi)}  ·  L ${temp(d0.lo)}${c.feelsLike != null ? `  ·  ${c.feelsLabel} ${temp(c.feelsLike)}` : ''}`
-    : (c.feelsLike != null ? `${c.feelsLabel} ${temp(c.feelsLike)}` : '');
+  const range = [];
+  if (d0?.hi != null) range.push(`H ${temp(d0.hi)}`);
+  if (d0?.lo != null) range.push(`L ${temp(d0.lo)}`);
+  if (c.feelsLike != null) range.push(`${c.feelsLabel} ${temp(c.feelsLike)}`);
+  $('#hero-range').textContent = range.join('  ·  ');
 
   data.tz = place.tz;
   data.coords = { lat: place.lat, lon: place.lon };
