@@ -31,9 +31,10 @@ export const hasWebGL2 = () => {
 /* ── flow estimation (CPU) ────────────────────────── */
 
 const GRID_W = 64;          // downsample width used for matching
-const BLOCK = 5;            // half-size of the patch compared
-const SEARCH = 7;           // search radius, in downsampled pixels
-const SMOOTH_PASSES = 3;
+const BLOCK = 4;            // half-size of the patch compared
+const SEARCH = 6;           // search radius, in downsampled pixels
+const SMOOTH_PASSES = 2;    // enough to stay coherent, not so much that the
+                            // whole field collapses to one global vector
 export const FLOW_MAX = 0.25;   // largest encodable flow, in UV units
 
 /* Reduce a composited frame to a small alpha map. Alpha is the useful signal:
@@ -106,8 +107,19 @@ export function estimateFlow(a, b, gw, gh) {
           if (cost < best) { best = cost; bdx = dx; bdy = dy; }
         }
       }
-      field[(y * gw + x) * 2] = bdx / gw;
-      field[(y * gw + x) * 2 + 1] = bdy / gh;
+
+      /* How much better is the best match than simply staying put? Where the
+         echo is featureless the search finds a "match" almost anywhere, and
+         acting on it warps pixels in a direction nothing actually moved —
+         which is what makes interpolation look rubbery and synthetic. Scale
+         the vector by that confidence so ambiguous areas quietly fall back to
+         a plain blend instead of inventing motion. */
+      const stay = sad(a, b, gw, gh, x, y, x, y);
+      const gain = stay > 1e-6 ? (stay - best) / stay : 0;
+      const conf = Math.max(0, Math.min(1, gain * 2.2));
+
+      field[(y * gw + x) * 2] = (bdx / gw) * conf;
+      field[(y * gw + x) * 2 + 1] = (bdy / gh) * conf;
     }
   }
 
@@ -150,9 +162,10 @@ uniform sampler2D uFlow;
 uniform float uT;         // 0..1 between A and B
 uniform float uFlowMax;
 uniform float uOpacity;
+uniform float uStrength;  // how much of the estimated motion to apply
 
 void main() {
-  vec2 flow = (texture(uFlow, vUv).rg - 0.5) * 2.0 * uFlowMax;
+  vec2 flow = (texture(uFlow, vUv).rg - 0.5) * 2.0 * uFlowMax * uStrength;
 
   // Pull A forward along the motion and B backward along it, so both land on
   // where the echo should be at time uT, then blend.
@@ -208,6 +221,7 @@ export function createFlowRenderer(canvas) {
     t: gl.getUniformLocation(prog, 'uT'),
     max: gl.getUniformLocation(prog, 'uFlowMax'),
     opacity: gl.getUniformLocation(prog, 'uOpacity'),
+    strength: gl.getUniformLocation(prog, 'uStrength'),
   };
   gl.uniform1i(U.a, 0);
   gl.uniform1i(U.b, 1);
@@ -217,7 +231,7 @@ export function createFlowRenderer(canvas) {
   gl.enable(gl.BLEND);
   gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 
-  let frameTex = [], flowTex = [], opacity = 0.9;
+  let frameTex = [], flowTex = [], opacity = 0.9, strength = 1;
 
   function makeTex(source, linear = true) {
     const t = gl.createTexture();
@@ -253,30 +267,57 @@ export function createFlowRenderer(canvas) {
 
     setOpacity(v) { opacity = v; },
 
-    /* `composites` are canvases/bitmaps, one per time step, already merged. */
-    async build(composites, onProgress) {
-      clearTextures();
-      if (!composites.length) return;
+    /* 1 applies the full estimated motion; lower values ease toward a plain
+       blend, which is steadier when the estimate is noisy. */
+    setStrength(v) { strength = Math.max(0, Math.min(1, v)); },
+
+    /* `composites` are canvases/bitmaps, one per time step, already merged.
+     *
+     * Builds into local arrays and only swaps them in at the very end. An
+     * earlier version cleared the textures up front, so a zoom that arrived
+     * mid-build left the radar permanently blank — the old frames were gone
+     * and the new ones never committed. `shouldAbort` lets a superseded build
+     * bail without touching what is currently on screen.
+     */
+    async build(composites, onProgress, shouldAbort = () => false) {
+      if (!composites.length) return false;
 
       const w = composites[0].width, h = composites[0].height;
+      const nextFrames = [], nextFlow = [];
+      const discard = () => {
+        for (const t of nextFrames) gl.deleteTexture(t);
+        for (const t of nextFlow) gl.deleteTexture(t);
+      };
+
+      try {
+        for (const c of composites) nextFrames.push(makeTex(c));
+
+        const gw = GRID_W;
+        const gh = Math.max(8, Math.round(GRID_W * (h / w)));
+        const scratch = document.createElement('canvas');
+        const maps = composites.map((c) => alphaMap(c, gw, gh, scratch));
+
+        for (let i = 0; i < maps.length - 1; i++) {
+          if (shouldAbort()) { discard(); return false; }
+          const field = estimateFlow(maps[i], maps[i + 1], gw, gh);
+          nextFlow.push(makeDataTex(encodeFlow(field, gw, gh), gw, gh));
+          onProgress?.((i + 1) / (maps.length - 1));
+          // yield so the loading UI can paint between pairs
+          await new Promise((r) => setTimeout(r, 0));
+        }
+      } catch (e) {
+        discard();
+        throw e;
+      }
+
+      if (shouldAbort()) { discard(); return false; }
+
+      clearTextures();
+      frameTex = nextFrames;
+      flowTex = nextFlow;
       canvas.width = w; canvas.height = h;
       gl.viewport(0, 0, w, h);
-
-      for (const c of composites) frameTex.push(makeTex(c));
-
-      const gw = GRID_W;
-      const gh = Math.max(8, Math.round(GRID_W * (h / w)));
-      const scratch = document.createElement('canvas');
-
-      const maps = composites.map((c) => alphaMap(c, gw, gh, scratch));
-
-      for (let i = 0; i < maps.length - 1; i++) {
-        const field = estimateFlow(maps[i], maps[i + 1], gw, gh);
-        flowTex.push(makeDataTex(encodeFlow(field, gw, gh), gw, gh));
-        onProgress?.((i + 1) / (maps.length - 1));
-        // yield so the loading UI can paint between pairs
-        await new Promise((r) => setTimeout(r, 0));
-      }
+      return true;
     },
 
     /* i = frame index, t = 0..1 toward the next frame */
@@ -296,6 +337,7 @@ export function createFlowRenderer(canvas) {
       gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, f);
       gl.uniform1f(U.t, a === b ? 0 : Math.max(0, Math.min(1, t)));
       gl.uniform1f(U.opacity, opacity);
+      gl.uniform1f(U.strength, strength);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
     },
 

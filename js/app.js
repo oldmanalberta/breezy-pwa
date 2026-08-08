@@ -167,13 +167,14 @@ function skeleton(place) {
 }
 
 /* ── data flow ────────────────────────────────────── */
-async function refresh({ silent = false } = {}) {
+async function refresh({ silent = false, force = false } = {}) {
   const place = activePlace();
   if (!place) { showEmpty(); return; }
   if (busy) return;
   busy = true;
 
-  const cached = readCache(place.id);
+  // an explicit refresh should go to the network, not repaint the cache
+  const cached = force ? null : readCache(place.id);
   if (cached && !current) paint(cached.data, place, true);
   else if (!silent && !current) skeleton(place);
 
@@ -439,24 +440,37 @@ function wire() {
      was 0, so simply scrolling back up to the hero re-fetched the forecast
      over and over. It now needs a long pull that both starts and ends pinned
      at the very top, with a cooldown so a flick can't chain refreshes. */
-  const PULL_PX = 150;
-  const PULL_COOLDOWN = 20000;
+  /* iOS reports a NEGATIVE window.scrollY while rubber-banding at the top, so
+     the previous `scrollY === 0` test rejected exactly the gesture it was
+     meant to detect — the pull never fired on the phone. Treat anything at or
+     above the top as the top. */
+  const atTop = () => window.scrollY <= 0;
+  const PULL_PX = 110;
+  const PULL_COOLDOWN = 8000;
   let y0 = null, lastPull = 0;
 
   window.addEventListener('touchstart', (e) => {
-    y0 = window.scrollY === 0 && e.touches.length === 1 ? e.touches[0].clientY : null;
+    y0 = atTop() && e.touches.length === 1 ? e.touches[0].clientY : null;
   }, { passive: true });
 
   window.addEventListener('touchend', (e) => {
     const start = y0;
     y0 = null;
-    if (start === null || window.scrollY !== 0) return;
+    if (start === null || !atTop()) return;
     if (e.changedTouches[0].clientY - start < PULL_PX) return;
     if (busy || Date.now() - lastPull < PULL_COOLDOWN) return;
+    doRefresh();
+  }, { passive: true });
+
+  // tapping the "Updated …" line is the discoverable way to refresh
+  $('#place-sub').addEventListener('click', doRefresh);
+
+  function doRefresh() {
+    if (busy) return;
     lastPull = Date.now();
     toast('Updating forecast…', 1400);
-    refresh({ silent: true });
-  }, { passive: true });
+    refresh({ silent: true, force: true });
+  }
 }
 
 /* ── boot ─────────────────────────────────────────── */

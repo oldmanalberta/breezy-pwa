@@ -123,7 +123,6 @@ export const DAILY_MODES = {
     kind: 'range',
     hi: (d) => d.hi, lo: (d) => d.lo,
     fmt: (v) => temp(v),
-    icons: true,
   },
   precipitation: {
     label: 'Precipitation',
@@ -249,9 +248,12 @@ export function dailyCard(data, modeKey = 'conditions') {
       </div>`;
   }).join('');
 
+  /* The night icon renders in every series, not just Conditions. It is useful
+     everywhere, and reserving the row unconditionally is what keeps the card
+     the same height as you switch series — otherwise the sheet jumps. */
   const feet = days.map((d) => `<div class="dp-col">
-      ${mode.icons ? `<span class="dp-ico dim">${icon(d.condition, true)}</span>` : ''}
-      ${d.pop != null && d.pop > 5 ? `<span class="dp-pop">${Math.round(d.pop)}%</span>` : '<span class="dp-pop"></span>'}
+      <span class="dp-ico dim">${icon(d.condition, true)}</span>
+      <span class="dp-pop">${d.pop != null && d.pop > 5 ? Math.round(d.pop) + '%' : ''}</span>
     </div>`).join('');
 
   const chart = mode.kind === 'range' ? rangeChart(days, mode, W) : barChart(days, mode, W);

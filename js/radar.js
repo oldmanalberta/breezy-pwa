@@ -173,8 +173,11 @@ export function createRadar(host, { lat, lon, tz }) {
   glCanvas.className = 'rd-gl';
   let flowR = null;
   if (useFlow) {
-    try { flowR = createFlowRenderer(glCanvas); useFlow = !!flowR; }
-    catch (e) { console.warn('WebGL2 radar unavailable', e); useFlow = false; }
+    try {
+      flowR = createFlowRenderer(glCanvas);
+      useFlow = !!flowR;
+      flowR?.setStrength(state.radarFlow === 'subtle' ? 0.5 : 1);
+    } catch (e) { console.warn('WebGL2 radar unavailable', e); useFlow = false; }
   }
 
   host.innerHTML = `
@@ -225,6 +228,10 @@ export function createRadar(host, { lat, lon, tz }) {
   const stamp = host.querySelector('#rd-stamp');
   const slider = host.querySelector('#rd-slider');
   const playBtn = host.querySelector('.rd-play');
+
+  // attach the GL surface once and leave it there; rebuilds swap textures
+  // underneath rather than tearing the element out of the DOM
+  if (useFlow) frameLayer.appendChild(glCanvas);
 
   /* ── base tiles ── */
   function drawTiles() {
@@ -329,10 +336,13 @@ export function createRadar(host, { lat, lon, tz }) {
     if (useFlow && flowR) {
       try {
         updateLoading(0, 1, 'Tracking motion');
-        await flowR.build(composites, (p) => updateLoading(p, 1, 'Tracking motion'));
-        if (loadedFor !== myKey) return;
-        frameLayer.innerHTML = '';
-        frameLayer.appendChild(glCanvas);
+        const committed = await flowR.build(
+          composites,
+          (p) => updateLoading(p, 1, 'Tracking motion'),
+          () => loadedFor !== myKey,
+        );
+        if (!committed) return;          // superseded; previous view left intact
+        // the canvas lives in the layer permanently, so nothing to re-attach
         ready = true;
         updateLoading(1, 1);
         showFrame(idx, 0);
@@ -340,6 +350,7 @@ export function createRadar(host, { lat, lon, tz }) {
       } catch (e) {
         console.warn('flow renderer failed, falling back to cross-fade', e);
         useFlow = false;
+        glCanvas.remove();
       }
     }
 
