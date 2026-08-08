@@ -341,6 +341,35 @@ export function createFlowRenderer(canvas) {
       gl.drawArrays(gl.TRIANGLES, 0, 3);
     },
 
+    /* Did the last draw actually put anything on the buffer?
+     *
+     * WebGL can fail silently — a lost context, an exhausted texture budget, a
+     * driver that refuses a large upload — and the result is a blank canvas
+     * with no thrown error and no GL error code. Since the caller knows
+     * independently whether the frames contain echo, comparing that against
+     * what actually rasterised is the only reliable way to catch it. Must be
+     * called in the same task as a draw: without preserveDrawingBuffer the
+     * buffer is cleared once the frame is composited.
+     */
+    probe(i = 0) {
+      if (!frameTex.length) return 0;
+      this.draw(i, 0);
+      const w = canvas.width, h = canvas.height;
+      if (!w || !h) return 0;
+      /* Read the whole buffer, not a band. Precipitation is frequently off to
+         one side of the view — a first attempt sampled only the middle rows and
+         reported "nothing rendered" for a perfectly good frame whose echo sat
+         north of centre, which would have disabled WebGL for no reason. */
+      const px = new Uint8Array(w * h * 4);
+      try { gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px); }
+      catch { return -1; }                 // unreadable: don't claim failure
+      let hits = 0;
+      for (let p = 3; p < px.length; p += 4 * 7) if (px[p] > 8) hits++;
+      return hits;
+    },
+
+    get contextLost() { return gl.isContextLost(); },
+
     destroy() {
       clearTextures();
       gl.deleteProgram(prog);

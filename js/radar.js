@@ -235,7 +235,22 @@ export function createRadar(host, { lat, lon, tz }) {
 
   // attach the GL surface once and leave it there; rebuilds swap textures
   // underneath rather than tearing the element out of the DOM
-  if (useFlow) frameLayer.appendChild(glCanvas);
+  if (useFlow) {
+    frameLayer.appendChild(glCanvas);
+    /* A lost context leaves a permanently blank canvas. iOS reclaims GPU
+       resources aggressively when memory is tight, so treat it as a signal to
+       stop using WebGL for the rest of the session rather than retry into the
+       same wall. */
+    glCanvas.addEventListener('webglcontextlost', (e) => {
+      e.preventDefault();
+      console.warn('WebGL context lost; reverting radar to images');
+      useFlow = false;
+      ready = false;
+      glCanvas.remove();
+      loadedFor = null;
+      drawFrames();
+    });
+  }
 
   /* ── base tiles ── */
   function drawTiles() {
@@ -306,7 +321,10 @@ export function createRadar(host, { lat, lon, tz }) {
     const h = Math.min(2048, Math.round(H * scale));
     const c = document.createElement('canvas');
     c.width = w; c.height = h;
-    const ctx = c.getContext('2d', { willReadFrequently: true });
+    // Deliberately NOT willReadFrequently: this canvas is uploaded as a WebGL
+    // texture, and hinting it for CPU readback pushes it to a software surface
+    // on some engines. The echo check below reads a small copy instead.
+    const ctx = c.getContext('2d');
     if (rain) { ctx.drawImage(rain, 0, 0, w, h); rain.close?.(); }
     if (snow) { ctx.drawImage(snow, 0, 0, w, h); snow.close?.(); }
 
@@ -362,10 +380,12 @@ export function createRadar(host, { lat, lon, tz }) {
     const total = frames.length;
     updateLoading(0, total, 'Loading radar');
 
-    // Flow interpolation holds every frame in GPU memory, so cap the texture
-    // size rather than pushing full 2x on a large viewport.
+    /* Flow interpolation holds all twelve frames in GPU memory at once, so the
+       texture budget matters far more than the last bit of sharpness. At 1400
+       on a tall phone that was ~43MB of textures, which is enough for iOS to
+       start reclaiming them; 1100 roughly halves it. */
     const scale = useFlow
-      ? Math.min(RES_SCALE(), 1400 / Math.max(W, H))
+      ? Math.min(RES_SCALE(), 1100 / Math.max(W, H))
       : RES_SCALE();
 
     const bbox = currentBbox();
@@ -392,11 +412,23 @@ export function createRadar(host, { lat, lon, tz }) {
           () => loadedFor !== myKey,
         );
         if (!committed) return;          // superseded; previous view left intact
-        // the canvas lives in the layer permanently, so nothing to re-attach
-        ready = true;
-        updateLoading(1, 1);
-        showFrame(idx, 0);
-        return;
+
+        /* Confirm the GPU actually drew the echo we know is in these frames.
+           On some devices WebGL yields a blank canvas with no error at all, and
+           the radar then looks broken while the plain-image card beside it works
+           fine. Rather than diagnose every cause, check the result and switch
+           to images if it came out empty. */
+        const drawn = flowR.probe(idx);
+        if (anyEcho && drawn === 0) {
+          console.warn('WebGL radar produced an empty frame; using images instead');
+          useFlow = false;
+          glCanvas.remove();
+        } else {
+          ready = true;
+          updateLoading(1, 1);
+          showFrame(idx, 0);
+          return;
+        }
       } catch (e) {
         console.warn('flow renderer failed, falling back to cross-fade', e);
         useFlow = false;
