@@ -185,6 +185,10 @@ export function createRadar(host, { lat, lon, tz }) {
       <div class="rd-tiles"></div>
       <div class="rd-frames"></div>
       <div class="rd-pin" title="Your location"></div>
+      <div class="rd-empty" id="rd-empty" hidden>
+        <b>Little or no precipitation in view</b>
+        <span>The radar is working — there is simply nothing falling here right now. Zoom out to look further afield.</span>
+      </div>
     </div>
     <div class="rd-top">
       <button class="icon-btn" data-rd="close" aria-label="Close radar">
@@ -286,21 +290,61 @@ export function createRadar(host, { lat, lon, tz }) {
      Access-Control-Allow-Origin: *. */
   async function loadComposite(bbox, iso, scale) {
     const [rain, snow] = await Promise.all([RAIN, SNOW].map(async (layer) => {
+      // A wide bbox makes GeoMet render a lot; without a ceiling one slow
+      // layer holds up the whole run.
+      const ac = new AbortController();
+      const kill = setTimeout(() => ac.abort(), 20000);
       try {
-        const r = await fetch(wmsUrl(layer, bbox, W, H, iso, scale));
+        const r = await fetch(wmsUrl(layer, bbox, W, H, iso, scale), { signal: ac.signal });
         if (!r.ok) return null;
         return await createImageBitmap(await r.blob());
       } catch { return null; }
+      finally { clearTimeout(kill); }
     }));
 
     const w = Math.min(2048, Math.round(W * scale));
     const h = Math.min(2048, Math.round(H * scale));
     const c = document.createElement('canvas');
     c.width = w; c.height = h;
-    const ctx = c.getContext('2d');
+    const ctx = c.getContext('2d', { willReadFrequently: true });
     if (rain) { ctx.drawImage(rain, 0, 0, w, h); rain.close?.(); }
     if (snow) { ctx.drawImage(snow, 0, 0, w, h); snow.close?.(); }
+
+    /* Note whether this frame contains any echo at all. A clear sky renders
+       exactly like a broken radar — blank — so the panel needs to be able to
+       say which it is rather than leaving you guessing. Checked on a small
+       downscale: reading back a full-resolution frame costs megabytes per
+       frame and this only needs presence, not a count. */
+    let pct = 100;               // unreadable: assume there is data
+    try {
+      const t = document.createElement('canvas');
+      t.width = 64; t.height = 64;
+      const tx = t.getContext('2d', { willReadFrequently: true });
+      tx.drawImage(c, 0, 0, 64, 64);
+      const d = tx.getImageData(0, 0, 64, 64).data;
+      let hits = 0;
+      for (let i = 3; i < d.length; i += 4) if (d[i] > 12) hits++;
+      pct = (hits / 4096) * 100;
+    } catch { /* keep the optimistic default */ }
+    c.echoPct = pct;
     return c;
+  }
+
+  /* Run `fn` over `items` with bounded concurrency. Fetching the twelve frames
+     one after another meant twenty-four sequential WMS renders, which at a wide
+     bbox is slow enough to look like a hang. */
+  async function mapLimit(items, limit, fn, onDone) {
+    const out = new Array(items.length);
+    let next = 0, done = 0;
+    await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
+      for (;;) {
+        const k = next++;
+        if (k >= items.length) return;
+        out[k] = await fn(items[k], k);
+        onDone?.(++done);
+      }
+    }));
+    return out;
   }
 
   /* Animation must not start until every frame has arrived, otherwise Play
@@ -325,13 +369,19 @@ export function createRadar(host, { lat, lon, tz }) {
       : RES_SCALE();
 
     const bbox = currentBbox();
-    const composites = [];
-    for (let i = 0; i < frames.length; i++) {
-      const iso = frames[i].toISOString().replace(/\.\d+Z$/, 'Z');
-      composites.push(await loadComposite(bbox, iso, Math.max(1, scale)));
-      if (loadedFor !== myKey) return;          // a pan/zoom superseded this load
-      updateLoading(i + 1, total, 'Loading radar');
-    }
+    const composites = await mapLimit(
+      frames, 4,
+      (t) => loadComposite(bbox, t.toISOString().replace(/\.\d+Z$/, 'Z'), Math.max(1, scale)),
+      (n) => updateLoading(n, total, 'Loading radar'),
+    );
+    if (loadedFor !== myKey) return;            // a pan/zoom superseded this load
+
+    /* A few stray pixels of echo are invisible at a glance, so treating "not
+       exactly zero" as "there is weather here" still leaves you staring at an
+       apparently broken map. Anything under a third of a percent of the view
+       counts as nothing worth showing. */
+    const anyEcho = composites.some((c) => c.echoPct > 0.3);
+    host.querySelector('#rd-empty').hidden = anyEcho;
 
     if (useFlow && flowR) {
       try {
@@ -612,7 +662,10 @@ export function createRadar(host, { lat, lon, tz }) {
     resize();
     updateAttrib();
     try {
-      frames = await fetchFrameTimes(12);
+      /* Nine scans is ~54 minutes of history. Twelve pushed the open-to-ready
+         time to roughly nine seconds, since every extra frame costs two WMS
+         renders and another motion-estimation pass. */
+      frames = await fetchFrameTimes(9);
       idx = frames.length - 1;
       slider.max = String(frames.length - 1);
       loadedFor = null;

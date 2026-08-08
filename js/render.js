@@ -360,11 +360,57 @@ export function radarCard(data) {
 const MOON_NAMES = ['New moon', 'Waxing crescent', 'First quarter', 'Waxing gibbous',
                     'Full moon', 'Waning gibbous', 'Last quarter', 'Waning crescent'];
 
+const SYNODIC = 29.530588853;      // days between new moons
+
 function moonPhase(date = new Date()) {
-  // days since a known new moon (2000-01-06 18:14 UTC), synodic month 29.530588853
+  // days since a known new moon (2000-01-06 18:14 UTC)
   const days = (date.getTime() - Date.UTC(2000, 0, 6, 18, 14)) / 86400000;
-  const frac = ((days / 29.530588853) % 1 + 1) % 1;
-  return { frac, name: MOON_NAMES[Math.round(frac * 8) % 8] };
+  const frac = ((days / SYNODIC) % 1 + 1) % 1;          // 0 = new, 0.5 = full
+  const illum = (1 - Math.cos(2 * Math.PI * frac)) / 2; // 0 = dark, 1 = full
+  return { frac, illum, name: MOON_NAMES[Math.round(frac * 8) % 8] };
+}
+
+/* Draw the moon as it actually looks, because "waning gibbous" tells you
+   nothing if you don't already know the word.
+   The lit region is the outer limb on one side plus the terminator, which is
+   a half-ellipse whose width tracks how far through the cycle we are. */
+export function moonSvg(frac, size = 62) {
+  const r = size / 2 - 2, cx = size / 2, cy = size / 2;
+  const illum = (1 - Math.cos(2 * Math.PI * frac)) / 2;
+  const disc = `<circle cx="${cx}" cy="${cy}" r="${r}" fill="#20262f"/>
+                <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#3a4350" stroke-width="1"/>`;
+
+  if (illum > 0.995) {
+    return `<svg viewBox="0 0 ${size} ${size}">${disc}
+      <circle cx="${cx}" cy="${cy}" r="${r}" fill="#EDF2F8"/></svg>`;
+  }
+  if (illum < 0.005) return `<svg viewBox="0 0 ${size} ${size}">${disc}</svg>`;
+
+  const waxing = frac < 0.5;
+  const rx = r * Math.abs(Math.cos(2 * Math.PI * frac));
+  const outer = waxing ? 1 : 0;                 // which limb catches the light
+  const inner = illum > 0.5 ? outer : 1 - outer; // gibbous bulges out, crescent in
+
+  const lit = `M ${cx} ${cy - r}
+               A ${r} ${r} 0 0 ${outer} ${cx} ${cy + r}
+               A ${rx.toFixed(2)} ${r} 0 0 ${inner} ${cx} ${cy - r} Z`;
+
+  return `<svg viewBox="0 0 ${size} ${size}">${disc}
+    <path d="${lit}" fill="#EDF2F8"/></svg>`;
+}
+
+/* Days until the next new moon and the next full moon. */
+function moonEvents(frac) {
+  const toNew = (1 - frac) % 1 * SYNODIC;
+  const toFull = ((0.5 - frac + 1) % 1) * SYNODIC;
+  const fmt = (d) => {
+    if (d < 1) return `${Math.max(1, Math.round(d * 24))} hours`;
+    const n = Math.round(d);
+    return `${n} day${n === 1 ? '' : 's'}`;
+  };
+  return toFull <= toNew
+    ? { next: 'Full moon', in: fmt(toFull), other: 'New moon', otherIn: fmt(toNew) }
+    : { next: 'New moon', in: fmt(toNew), other: 'Full moon', otherIn: fmt(toFull) };
 }
 
 export function sunCard(data) {
@@ -379,7 +425,8 @@ export function sunCard(data) {
   const px = cx + Math.cos(ang) * r, py = cy - Math.sin(ang) * r;
 
   const lenMin = Math.round((sunset - sunrise) / 60000);
-  const { frac, name } = moonPhase();
+  const { frac, illum, name } = moonPhase();
+  const ev = moonEvents(frac);
 
   return card('Sun & moon', G.sun, `
     <div class="sun-arc">
@@ -396,9 +443,14 @@ export function sunCard(data) {
         <div style="text-align:right">Sunset<b>${timeLabel(sunset, data.tz)}</b></div>
       </div>
     </div>
-    <div class="grid" style="margin-top:16px;grid-template-columns:1fr">
-      <div class="tile"><div class="k">Moon phase</div><div class="v">${name}</div>
-        <div class="s">${Math.round(frac * 100)}% through the lunar cycle</div></div>
+    <div class="moon">
+      <div class="moon-disc">${moonSvg(frac)}</div>
+      <div class="moon-info">
+        <b>${name}</b>
+        <span>${Math.round(illum * 100)}% lit</span>
+        <div class="moon-next"><em>${ev.next}</em> in ${ev.in}</div>
+        <div class="moon-other">${ev.other} in ${ev.otherIn}</div>
+      </div>
     </div>`);
 }
 
