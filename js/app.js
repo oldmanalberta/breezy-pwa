@@ -36,6 +36,36 @@ function closePanels() {
   document.body.style.overflow = '';
 }
 
+/* ── location paging ──────────────────────────────── */
+function renderDots() {
+  const dots = $('#place-dots');
+  if (!dots) return;
+  const n = state.places.length;
+  dots.innerHTML = n > 1
+    ? state.places.map((p) => `<i class="${p.id === state.activeId ? 'on' : ''}"></i>`).join('')
+    : '';
+}
+
+function stepPlace(dir) {
+  if (state.places.length < 2) return;
+  const i = state.places.findIndex((p) => p.id === state.activeId);
+  const next = state.places[(i + dir + state.places.length) % state.places.length];
+  if (!next) return;
+
+  set('activeId', next.id);
+  current = null;
+  renderDots();
+
+  // slide the hero the way the finger went, so the change reads directionally
+  const hero = $('#hero');
+  hero.classList.remove('slide-l', 'slide-r');
+  void hero.offsetWidth;                     // restart the animation
+  hero.classList.add(dir > 0 ? 'slide-l' : 'slide-r');
+
+  renderSaved();
+  refresh();
+}
+
 /* ── radar ────────────────────────────────────────── */
 let radar = null;
 
@@ -97,6 +127,7 @@ function paint(data, place, stale = false) {
   bits.push(stale ? `Offline · ${timeLabel(data.updated, place.tz)}` : `Updated ${timeLabel(data.updated, place.tz)}`);
   $('#place-sub').textContent = bits.join(' · ');
 
+  renderDots();
   $('#hero-icon').innerHTML = icon(c.condition, c.night);
   $('#hero-temp').innerHTML = `${temp(c.temp, false)}<span class="deg">°</span>`;
   $('#hero-cond').textContent = c.text || '—';
@@ -376,6 +407,31 @@ function wire() {
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden && current && Date.now() - current.updated > 10 * 60e3) refresh({ silent: true });
   });
+
+  /* Horizontal swipe on the hero pages between saved locations.
+     Guarded so it can't hijack a vertical scroll, and ignored inside the
+     hourly/daily strips and the radar, which have their own horizontal
+     scrolling. */
+  let sw = null;
+  const SWIPE_X = 60;          // minimum horizontal travel
+  const SWIPE_RATIO = 1.7;     // how much more horizontal than vertical
+
+  window.addEventListener('touchstart', (e) => {
+    if (e.touches.length !== 1) { sw = null; return; }
+    if (e.target.closest('.hourly-wrap, .dp-scroll, .dp-pills, .radar, .panel')) { sw = null; return; }
+    const t = e.touches[0];
+    sw = { x: t.clientX, y: t.clientY };
+  }, { passive: true });
+
+  window.addEventListener('touchend', (e) => {
+    const s = sw;
+    sw = null;
+    if (!s || state.places.length < 2) return;
+    const dx = e.changedTouches[0].clientX - s.x;
+    const dy = e.changedTouches[0].clientY - s.y;
+    if (Math.abs(dx) < SWIPE_X || Math.abs(dx) < Math.abs(dy) * SWIPE_RATIO) return;
+    stepPlace(dx < 0 ? 1 : -1);   // swipe left -> next location
+  }, { passive: true });
 
   /* Pull-to-refresh, deliberately hard to trigger by accident.
      The first version fired on any downward swipe past 110px while scrollY

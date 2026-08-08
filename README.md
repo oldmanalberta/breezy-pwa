@@ -30,13 +30,16 @@ account, and no 7-day expiry.
   location; tap it for the full-screen map with a 12-frame animation covering
   roughly the last 70 minutes, a scrub slider, and the official ECCC legend.
   Playback is held until every frame has downloaded, so the animation never
-  runs through blank frames. Base map follows the app theme or can be pinned
-  to light or dark.
+  runs through blank frames. Five base maps — Terrain (default, shows roads
+  and towns), Streets, Satellite, Light, Dark. Imagery is requested at the
+  device pixel ratio and cross-faded between frames so motion reads as
+  continuous rather than as a slideshow.
 - **Weather alerts** — active ECCC warnings and watches, colour-coded by risk,
   tap to expand the full bulletin.
 - **Canadian AQHI** — the actual Air Quality Health Index Canadians use, not a
   converted US AQI (falls back to US AQI outside Canada).
-- Multiple saved locations, device geolocation, °C/°F, km/h · m/s · mph.
+- Multiple saved locations with swipe left/right to page between them,
+  device geolocation, °C/°F, km/h · m/s · mph.
 - Light and dark themes, offline launch from the last saved forecast.
 
 ## Weather sources
@@ -165,6 +168,7 @@ index.html              app shell
 manifest.webmanifest    PWA metadata (name, icons, standalone display)
 sw.js                   service worker — offline app shell
 css/app.css             Material 3 Expressive styling
+fonts/                  Aileron (Light / Regular / Bold), self-hosted
 js/app.js               controller: state, rendering, events
 js/render.js            card renderers
 js/icons.js             SVG weather icons, condition mapping, sky palettes
@@ -187,8 +191,13 @@ Breezy Weather code was copied, and the name and logo are not used as branding.
 - Weather data © **Environment and Climate Change Canada**, used under the
   [Open Government Licence – Canada](https://open.canada.ca/en/open-government-licence-canada).
 - Weather data from **[Open-Meteo](https://open-meteo.com)**, licensed CC BY 4.0.
-- Radar base map © **[CARTO](https://carto.com/attributions)**, map data ©
-  **[OpenStreetMap](https://www.openstreetmap.org/copyright)** contributors.
+- Radar base maps © **[CARTO](https://carto.com/attributions)**, map data ©
+  **[OpenStreetMap](https://www.openstreetmap.org/copyright)** contributors,
+  and **[Esri](https://www.esri.com)** (World Topo / World Imagery) with USGS,
+  NOAA and Maxar. Attribution is shown live in the radar view and changes with
+  the selected base map.
+- **[Aileron](https://dotcolon.net/font/aileron)** by Sora Sagano, released
+  into the public domain (CC0).
 
 Note that publishing an app under a GPL-family licence to Apple's App Store
 conflicts with the App Store terms; installing your own build to your own device

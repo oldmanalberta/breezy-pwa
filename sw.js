@@ -1,12 +1,15 @@
 ﻿/* Service worker: cache the app shell so Breezy opens instantly and works
    offline (the last forecast is kept separately in localStorage). */
 
-const VERSION = 'breezy-v3';
+const VERSION = 'breezy-v4';
 const SHELL = [
   './',
   './index.html',
   './manifest.webmanifest',
   './css/app.css',
+  './fonts/Aileron-Light.otf',
+  './fonts/Aileron-Regular.otf',
+  './fonts/Aileron-Bold.otf',
   './js/app.js',
   './js/store.js',
   './js/icons.js',

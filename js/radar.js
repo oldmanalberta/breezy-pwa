@@ -40,11 +40,18 @@ const worldToMercX = (x, z) => (x / (TILE * 2 ** z)) * 2 * A - A;
 const worldToMercY = (y, z) => A - (y / (TILE * 2 ** z)) * 2 * A;
 
 /* ── WMS urls ─────────────────────────────────────── */
-function wmsUrl(layer, bbox, w, h, time) {
+/* The radar composite is 1 km data, so asking for it at CSS-pixel size throws
+   away detail on a retina screen and the result looks blocky. Render at the
+   device pixel ratio (capped) and let the browser scale it back down. */
+export const RES_SCALE = () => Math.min(2, Math.max(1, window.devicePixelRatio || 1));
+
+function wmsUrl(layer, bbox, w, h, time, scale = 1) {
   const p = new URLSearchParams({
     service: 'WMS', version: '1.3.0', request: 'GetMap',
     layers: layer, crs: 'EPSG:3857',
-    bbox: bbox.join(','), width: Math.round(w), height: Math.round(h),
+    bbox: bbox.join(','),
+    width: Math.min(2048, Math.round(w * scale)),
+    height: Math.min(2048, Math.round(h * scale)),
     format: 'image/png', transparent: 'true',
   });
   if (time) p.set('time', time);
@@ -54,30 +61,71 @@ function wmsUrl(layer, bbox, w, h, time) {
 export const legendUrl = (layer = RAIN) =>
   `${GEOMET}?service=WMS&version=1.3.0&request=GetLegendGraphic&layer=${layer}&format=image/png&sld_version=1.1.0`;
 
-export const baseTileUrl = (x, y, z, dark) =>
-  `https://basemaps.cartocdn.com/${dark ? 'dark_all' : 'light_all'}/${z}/${x}/${y}.png`;
+/* ── base maps ────────────────────────────────────────
+   Plain light/dark tiles are clean but nearly featureless under radar, so the
+   default is a terrain map that actually shows roads and towns — the reference
+   you need to tell where a cell is heading. */
+export const BASEMAPS = {
+  terrain: {
+    label: 'Terrain',
+    url: (x, y, z) => `https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/${z}/${y}/${x}`,
+    max: 19,
+    attrib: 'Map © <a href="https://www.esri.com" target="_blank" rel="noopener">Esri</a>, USGS, NOAA',
+    dark: false,
+  },
+  streets: {
+    label: 'Streets',
+    url: (x, y, z) => `https://basemaps.cartocdn.com/rastertiles/voyager/${z}/${x}/${y}.png`,
+    max: 20,
+    attrib: 'Map © <a href="https://carto.com/attributions" target="_blank" rel="noopener">CARTO</a>, © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>',
+    dark: false,
+  },
+  satellite: {
+    label: 'Satellite',
+    url: (x, y, z) => `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${z}/${y}/${x}`,
+    max: 19,
+    attrib: 'Imagery © <a href="https://www.esri.com" target="_blank" rel="noopener">Esri</a>, Maxar, Earthstar Geographics',
+    dark: true,
+  },
+  light: {
+    label: 'Light',
+    url: (x, y, z) => `https://basemaps.cartocdn.com/light_all/${z}/${x}/${y}.png`,
+    max: 20,
+    attrib: 'Map © <a href="https://carto.com/attributions" target="_blank" rel="noopener">CARTO</a>, © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>',
+    dark: false,
+  },
+  dark: {
+    label: 'Dark',
+    url: (x, y, z) => `https://basemaps.cartocdn.com/dark_all/${z}/${x}/${y}.png`,
+    max: 20,
+    attrib: 'Map © <a href="https://carto.com/attributions" target="_blank" rel="noopener">CARTO</a>, © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>',
+    dark: true,
+  },
+};
 
-/* Resolve the map's light/dark choice: an explicit setting, else the OS theme. */
-export const mapIsDark = () =>
-  state.mapTheme === 'dark' ? true
-  : state.mapTheme === 'light' ? false
-  : !window.matchMedia('(prefers-color-scheme: light)').matches;
+export const currentBasemap = () => BASEMAPS[state.mapTheme] ?? BASEMAPS.terrain;
+
+export const baseTileUrl = (x, y, z, map = currentBasemap()) => map.url(x, y, z);
+
+/* Whether the active base map is dark, so overlays can pick a readable tint. */
+export const mapIsDark = () => currentBasemap().dark;
 
 /* Everything needed to draw a non-interactive w×h map centred on a point:
    the base tiles with their offsets, plus radar images for that exact bbox.
    Used by the card preview, which shares this projection so the overlay lines
    up with the tiles without a map engine. */
-export function staticMapSpec(lat, lon, w, h, z = 6, dark = true) {
+export function staticMapSpec(lat, lon, w, h, z = 6) {
   const cx = lonToWorld(lon, z), cy = latToWorld(lat, z);
   const left = cx - w / 2, top = cy - h / 2;
   const n = 2 ** z;
+  const map = currentBasemap();
 
   const tiles = [];
   for (let x = Math.floor(left / TILE); x <= Math.floor((left + w) / TILE); x++) {
     for (let y = Math.floor(top / TILE); y <= Math.floor((top + h) / TILE); y++) {
       if (y < 0 || y >= n) continue;
       tiles.push({
-        url: baseTileUrl(((x % n) + n) % n, y, z, dark),
+        url: baseTileUrl(((x % n) + n) % n, y, z, map),
         left: x * TILE - left,
         top: y * TILE - top,
       });
@@ -147,9 +195,11 @@ export function createRadar(host, { lat, lon, tz }) {
         <input class="rd-slider" id="rd-slider" type="range" min="0" max="0" value="0" step="1" aria-label="Radar time">
         <button class="rd-legendbtn" data-rd="legend" aria-label="Show legend">mm/h</button>
       </div>
-      <p class="rd-attrib">Radar © Environment and Climate Change Canada ·
-        Map © <a href="https://carto.com/attributions" target="_blank" rel="noopener">CARTO</a>,
-        © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a></p>
+      <div class="rd-maps" id="rd-maps">
+        ${Object.entries(BASEMAPS).map(([k, m]) =>
+          `<button class="rd-map-pill${k === state.mapTheme ? ' on' : ''}" data-map="${k}">${m.label}</button>`).join('')}
+      </div>
+      <p class="rd-attrib" id="rd-attrib"></p>
     </div>
     <div class="rd-legendbox" id="rd-legendbox" hidden>
       <div class="rd-legendhead">Rain<span>mm/h</span></div>
@@ -163,12 +213,11 @@ export function createRadar(host, { lat, lon, tz }) {
   const slider = host.querySelector('#rd-slider');
   const playBtn = host.querySelector('.rd-play');
 
-  const dark = mapIsDark;
-
   /* ── base tiles ── */
   function drawTiles() {
     const left = cx - W / 2, top = cy - H / 2;
     const n = 2 ** z;
+    const map = currentBasemap();
     const x0 = Math.floor(left / TILE), x1 = Math.floor((left + W) / TILE);
     const y0 = Math.floor(top / TILE), y1 = Math.floor((top + H) / TILE);
 
@@ -189,7 +238,7 @@ export function createRadar(host, { lat, lon, tz }) {
       img.className = 'rd-tile';
       img.dataset.key = key;
       img.loading = 'eager';
-      img.src = baseTileUrl(t.wx, t.y, z, dark());
+      img.src = baseTileUrl(t.wx, t.y, z, map);
       img.style.transform = `translate(${t.x * TILE - left}px, ${t.y * TILE - top}px)`;
       tileLayer.appendChild(img);
     }
@@ -247,7 +296,7 @@ export function createRadar(host, { lat, lon, tz }) {
         // count errors too, or one dead tile would stall the loader forever
         img.addEventListener('load', settled, { once: true });
         img.addEventListener('error', settled, { once: true });
-        img.src = wmsUrl(layer, bbox, W, H, iso);
+        img.src = wmsUrl(layer, bbox, W, H, iso, RES_SCALE());
         g.appendChild(img);
       }
       frameLayer.appendChild(g);
@@ -281,6 +330,23 @@ export function createRadar(host, { lat, lon, tz }) {
         { hour: 'numeric', minute: '2-digit', timeZone: tz || undefined }).format(t);
       stamp.textContent = idx === frames.length - 1 ? `${time} · latest` : time;
     }
+  }
+
+  function setBasemap(key) {
+    set('mapTheme', key);
+    host.querySelectorAll('[data-map]').forEach((b) =>
+      b.classList.toggle('on', b.dataset.map === key));
+    // some sources stop short of the deepest zooms
+    const max = BASEMAPS[key].max ?? MAX_Z;
+    if (z > max) setZoom(max);
+    tileLayer.innerHTML = '';
+    drawTiles();
+    updateAttrib();
+  }
+
+  function updateAttrib() {
+    const el = host.querySelector('#rd-attrib');
+    if (el) el.innerHTML = `Radar © Environment and Climate Change Canada · ${currentBasemap().attrib}`;
   }
 
   function render() { drawTiles(); drawFrames(); }
@@ -411,10 +477,11 @@ export function createRadar(host, { lat, lon, tz }) {
     playBtn.classList.add('on');
     playBtn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M6 5h4v14H6zm8 0h4v14h-4z"/></svg>';
     clearInterval(timer);
+    // Slower than the cross-fade duration so frames blend continuously rather
+    // than snapping — the difference between a slideshow and apparent motion.
     timer = setInterval(() => {
-      // pause a beat on the newest frame so the loop reads clearly
       showFrame(idx >= frames.length - 1 ? 0 : idx + 1);
-    }, 520);
+    }, 620);
   }
 
   host.addEventListener('click', (e) => {
@@ -422,14 +489,13 @@ export function createRadar(host, { lat, lon, tz }) {
     if (act === 'in')  { setZoom(z + 1); deferFrames(); }
     if (act === 'out') { setZoom(z - 1); deferFrames(); }
     if (act === 'play') { playing ? stop() : play(); }
+    const mapKey = e.target.closest('[data-map]')?.dataset.map;
+    if (mapKey && BASEMAPS[mapKey]) { setBasemap(mapKey); return; }
+
     if (act === 'theme') {
-      const next = { auto: 'light', light: 'dark', dark: 'auto' }[state.mapTheme] ?? 'auto';
-      set('mapTheme', next);
-      host.dispatchEvent(new CustomEvent('radar-toast', {
-        bubbles: true, detail: `Map: ${next}${next === 'auto' ? ' (follows theme)' : ''}`,
-      }));
-      tileLayer.innerHTML = '';
-      drawTiles();
+      // cycle through the base maps in declaration order
+      const keys = Object.keys(BASEMAPS);
+      setBasemap(keys[(keys.indexOf(state.mapTheme) + 1) % keys.length]);
     }
     if (act === 'legend') {
       const box = host.querySelector('#rd-legendbox');
@@ -447,6 +513,7 @@ export function createRadar(host, { lat, lon, tz }) {
   /* ── start ── */
   (async () => {
     resize();
+    updateAttrib();
     try {
       frames = await fetchFrameTimes(12);
       idx = frames.length - 1;

@@ -27,13 +27,14 @@
       <button class="icon-btn" id="btn-places" aria-label="Locations">
         <svg viewBox="0 0 24 24"><path d="M12 2a7 7 0 0 0-7 7c0 5.25 7 13 7 13s7-7.75 7-13a7 7 0 0 0-7-7zm0 9.5A2.5 2.5 0 1 1 12 6.5a2.5 2.5 0 0 1 0 5z"/></svg>
       </button>
-      <div class="hero-place">
-        <h1 id="place-name">—</h1>
-        <p id="place-sub">Loading…</p>
-      </div>
       <button class="icon-btn" id="btn-settings" aria-label="Settings">
         <svg viewBox="0 0 24 24"><path d="M12 15.5A3.5 3.5 0 1 1 15.5 12 3.5 3.5 0 0 1 12 15.5zm7.43-2.53a7.7 7.7 0 0 0 0-1.94l2.03-1.58a.5.5 0 0 0 .12-.63l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.3 7.3 0 0 0-1.68-.97l-.36-2.54a.5.5 0 0 0-.49-.42h-3.84a.5.5 0 0 0-.49.42l-.36 2.54a7.3 7.3 0 0 0-1.68.97l-2.39-.96a.5.5 0 0 0-.6.22L2.42 8.82a.5.5 0 0 0 .12.63l2.03 1.58a7.7 7.7 0 0 0 0 1.94l-2.03 1.58a.5.5 0 0 0-.12.63l1.92 3.32a.5.5 0 0 0 .6.22l2.39-.96a7.3 7.3 0 0 0 1.68.97l.36 2.54a.5.5 0 0 0 .49.42h3.84a.5.5 0 0 0 .49-.42l.36-2.54a7.3 7.3 0 0 0 1.68-.97l2.39.96a.5.5 0 0 0 .6-.22l1.92-3.32a.5.5 0 0 0-.12-.63z"/></svg>
       </button>
+    </div>
+
+    <div class="hero-place">
+      <h1 id="place-name">—</h1>
+      <p id="place-sub">Loading…</p>
     </div>
 
     <div class="hero-main">
@@ -42,6 +43,8 @@
       <div class="hero-cond" id="hero-cond">—</div>
       <div class="hero-range" id="hero-range"></div>
     </div>
+
+    <div class="place-dots" id="place-dots" aria-hidden="true"></div>
 
     <div class="scroll-cue" id="scroll-cue">
       <svg viewBox="0 0 24 24"><path d="M7.4 8.6 12 13.2l4.6-4.6L18 10l-6 6-6-6z"/></svg>
@@ -111,9 +114,13 @@
     </div>
   </div>
   <div class="setting">
-    <label>Radar map</label>
-    <div class="seg" id="seg-maptheme">
-      <button data-v="auto" class="on">Auto</button><button data-v="light">Light</button><button data-v="dark">Dark</button>
+    <label>Radar base map</label>
+    <div class="seg col" id="seg-maptheme">
+      <button data-v="terrain" class="on">Terrain <em>Roads, towns and relief</em></button>
+      <button data-v="streets">Streets <em>Road detail, light background</em></button>
+      <button data-v="satellite">Satellite <em>Aerial imagery</em></button>
+      <button data-v="light">Light <em>Minimal, pale</em></button>
+      <button data-v="dark">Dark <em>Minimal, dark</em></button>
     </div>
   </div>
   <div class="setting">

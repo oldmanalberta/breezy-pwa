@@ -8,7 +8,7 @@ const DEFAULTS = {
   wind: 'kmh',
   source: 'auto',
   fx: 'on',
-  mapTheme: 'auto',        // radar base map: auto | light | dark
+  mapTheme: 'terrain',     // radar base map key, see BASEMAPS in radar.js
   dailyMode: 'conditions', // which series the daily panel charts
   order: null,             // card order; null means the default arrangement
   places: [],              // [{id,name,admin,cc,lat,lon,tz,current?:bool}]

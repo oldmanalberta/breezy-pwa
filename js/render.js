@@ -2,7 +2,7 @@
 
 import { icon } from './icons.js';
 import { state } from './store.js';
-import { radarAvailable, staticMapSpec, mapIsDark } from './radar.js';
+import { radarAvailable, staticMapSpec } from './radar.js';
 
 /* ── formatting ───────────────────────────────────── */
 export const toF = (c) => (c * 9) / 5 + 32;
@@ -337,7 +337,7 @@ export function radarCard(data) {
   // Card is roughly 16:10 at the sheet's inner width; 360×225 is close enough
   // and the browser scales the result to fit.
   const W = 360, H = 225;
-  const spec = staticMapSpec(lat, lon, W, H, 6, mapIsDark());
+  const spec = staticMapSpec(lat, lon, W, H, 6);
 
   const tiles = spec.tiles.map((t) =>
     `<img class="rd-base" src="${t.url}" alt="" loading="lazy" style="
@@ -413,7 +413,9 @@ export const CARDS = {
   sun:     { label: 'Sun & moon',           fn: sunCard },
 };
 
-export const DEFAULT_ORDER = ['hourly', 'radar', 'daily', 'details', 'air', 'sun'];
+/* Daily leads: with the shortened hero it is the card already on screen when a
+   location opens, which is the one worth seeing first. */
+export const DEFAULT_ORDER = ['daily', 'hourly', 'radar', 'details', 'air', 'sun'];
 
 export function normalizeOrder(order) {
   const seen = new Set();
