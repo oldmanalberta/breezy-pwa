@@ -63,7 +63,10 @@ export const LAYERS = {
     animated: true,
     timeMode: 'future',        // a forecast loop, like firesmoke.ca's
     frames: 12,
-    opacity: 0.6,
+    /* Smoke covers whole regions rather than the scattered cells radar draws,
+       so at radar's opacity it reads as a sheet laid over the map. Kept light
+       enough that roads and place names stay legible through the thick of it. */
+    opacity: 0.38,
     icon: '<svg viewBox="0 0 24 24"><path d="M4 15h13a3 3 0 1 0-2.6-4.5A4.5 4.5 0 0 0 6 11.2 2 2 0 0 0 4 15zm1.5 3h10a1 1 0 0 1 0 2h-10a1 1 0 0 1 0-2zm3 3h8a1 1 0 0 1 0 2h-8a1 1 0 0 1 0-2z"/></svg>',
   },
   wind: {
@@ -248,6 +251,12 @@ export async function fetchFrameTimes(limit = 12, layerName = RAIN, mode = 'past
 
 /* ── the map ──────────────────────────────────────── */
 export function createRadar(host, { lat, lon, tz }) {
+  /* Always open on precipitation. The layer choice persists while the panel is
+     up so switching back and forth is cheap, but carrying it across sessions
+     meant a glance at smoke last week decided what you saw when you opened the
+     radar to check for rain. Precipitation is what the panel is for. */
+  if (state.radarLayer !== 'precip') set('radarLayer', 'precip');
+
   let z = 7;
   let cx = lonToWorld(lon, z), cy = latToWorld(lat, z);   // centre, world px
   let W = 0, H = 0;

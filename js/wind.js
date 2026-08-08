@@ -20,7 +20,10 @@ const COLS = 13;          // grid samples across the view
 const ROWS = 11;
 const PARTICLES = 620;
 const MAX_AGE = 90;       // frames before a particle respawns
-const SPEED = 1.15;       // screen px per frame per km/h
+/* Screen px per frame per km/h. Doubling this to make windy areas obvious
+   overshot — the flow read as frantic rather than fast. Half that is enough to
+   tell calm from gale without the map feeling agitated. */
+const SPEED = 0.575;
 
 /* Speed shading under the particles, on the same blue-to-red reading as the
    precipitation scale: calm is blue, gale is red. Stops are km/h. */
