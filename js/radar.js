@@ -49,10 +49,17 @@ export const LAYERS = {
        dark red wash or a purple-heavy 0–500 scale that leaves ordinary smoke
        events almost invisible. firesmoke.ca's own palette could not be used
        directly — the site publishes no data service and no colour table. */
-    style: 'PM2.5_0to100ugm3_Dis',
-    legend: 'RAQDPS.SFC_PM2.5',
-    legendTitle: 'Surface PM2.5',
-    unit: 'µg/m³',
+    /* The Canadian Wildland Fire Information System renders smoke as a single
+       brown ramp over 1.0e-9 to 2.5e-7 kg/m³ — and that range is exactly what
+       this ECCC style covers, so the value mapping needs no interpretation.
+       Its own colours are a black-to-dark-red ramp rather than CWFIS brown, so
+       the tint is applied in CSS (see .rd-smoke): the luminance still carries
+       the concentration, only the hue changes. CWFIS publishes no colour table
+       either, so this matches their look rather than copying their values. */
+    style: 'PM2.5_1e-9to2.5e-7kgm3',
+    cwfisTint: true,
+    legendTitle: 'Peak PM2.5',
+    unit: 'kg/m³',
     animated: true,
     timeMode: 'future',        // a forecast loop, like firesmoke.ca's
     frames: 12,
@@ -121,8 +128,9 @@ function wmsUrl(layer, bbox, w, h, time, scale = 1, style = null) {
   return `${GEOMET}?${p}`;
 }
 
-export const legendUrl = (layer = RAIN) =>
-  `${GEOMET}?service=WMS&version=1.3.0&request=GetLegendGraphic&layer=${layer}&format=image/png&sld_version=1.1.0`;
+export const legendUrl = (layer = RAIN, style = null) =>
+  `${GEOMET}?service=WMS&version=1.3.0&request=GetLegendGraphic&layer=${layer}` +
+  `&format=image/png&sld_version=1.1.0${style ? `&style=${encodeURIComponent(style)}` : ''}`;
 
 /* ── base maps ────────────────────────────────────────
    Plain light/dark tiles are clean but nearly featureless under radar, so the
@@ -249,6 +257,8 @@ export function createRadar(host, { lat, lon, tz }) {
      just something in the way while you hunt for weather elsewhere. */
   let emptyDismissed = false;
   let windLayer = null;
+  const windSpeedCanvas = document.createElement('canvas');
+  windSpeedCanvas.className = 'rd-wind-speed';
   const windCanvas = document.createElement('canvas');
   windCanvas.className = 'rd-wind';
 
@@ -315,6 +325,7 @@ export function createRadar(host, { lat, lon, tz }) {
     <div class="rd-legendbox" id="rd-legendbox" hidden>
       <div class="rd-legendhead">Rain<span>mm/h</span></div>
       <img alt="Precipitation rate legend" src="${legendUrl()}">
+      <div class="rd-legendramp" id="rd-legendramp" hidden></div>
     </div>`;
 
   const map = host.querySelector('#rd-map');
@@ -448,6 +459,35 @@ export function createRadar(host, { lat, lon, tz }) {
     return c;
   }
 
+  /* Legend per overlay. Precipitation uses ECCC's own graphic; the other two
+     are recoloured or drawn locally, so their legends are built here to match
+     what is actually on screen rather than what GeoMet would have drawn. */
+  function paintLegend(l) {
+    const box = host.querySelector('#rd-legendbox');
+    const img = box.querySelector('img');
+    const ramp = box.querySelector('#rd-legendramp');
+    host.querySelector('.rd-legendhead').innerHTML = `${l.legendTitle}<span>${l.unit}</span>`;
+
+    if (l.legend && !l.cwfisTint) {
+      img.hidden = false;
+      ramp.hidden = true;
+      img.src = legendUrl(l.legend, l.style);
+      return;
+    }
+
+    img.hidden = true;
+    ramp.hidden = false;
+    if (l.cwfisTint) {
+      ramp.innerHTML = `
+        <div class="rd-ramp rd-ramp-smoke"></div>
+        <div class="rd-ramp-keys"><span>2.5e-7+</span><span>1.0e-9</span></div>`;
+    } else {
+      ramp.innerHTML = `
+        <div class="rd-ramp rd-ramp-wind"></div>
+        <div class="rd-ramp-keys"><span>90+</span><span>45</span><span>0</span></div>`;
+    }
+  }
+
   const setEmptyNotice = (anyEcho) => {
     host.querySelector('#rd-empty').hidden = anyEcho || emptyDismissed;
   };
@@ -524,11 +564,13 @@ export function createRadar(host, { lat, lon, tz }) {
       frameLayer.innerHTML = '';
       windLayer ??= createWindLayer(windCanvas);
       windLayer.resize(W, H);
+      frameLayer.appendChild(windSpeedCanvas);   // shading first, particles over
       frameLayer.appendChild(windCanvas);
       try {
         const grid = await fetchWindGrid(currentBounds());
         if (loadedFor !== myKey) return;
         windLayer.setField(grid);
+        windLayer.renderSpeedField(windSpeedCanvas);
         windLayer.start();
         stamp.innerHTML = `Wind <span class="rd-age">now · gusting to ${
           Math.round(grid.peak)} km/h in view</span>`;
@@ -730,10 +772,9 @@ export function createRadar(host, { lat, lon, tz }) {
 
     const l = LAYERS[key];
     host.querySelector('.rd-legendbtn').textContent = l.unit;
-    host.querySelector('#rd-legendbox img').src = legendUrl(l.legend);
-    host.querySelector('.rd-legendhead').innerHTML =
-      `${l.legendTitle}<span>${l.unit}</span>`;
     host.querySelector('.rd-title b').textContent = l.label;
+    paintLegend(l);
+    frameLayer.classList.toggle('rd-smoke', !!l.cwfisTint);
 
     slider.disabled = !l.animated;
     playBtn.hidden = !l.animated;
@@ -1004,10 +1045,8 @@ export function createRadar(host, { lat, lon, tz }) {
     const l = currentLayer();
     host.querySelector('.rd-title b').textContent = l.label;
     host.querySelector('.rd-legendbtn').textContent = l.unit;
-    if (l.legend) {
-      host.querySelector('#rd-legendbox img').src = legendUrl(l.legend);
-      host.querySelector('.rd-legendhead').innerHTML = `${l.legendTitle}<span>${l.unit}</span>`;
-    }
+    paintLegend(l);
+    frameLayer.classList.toggle('rd-smoke', !!l.cwfisTint);
     playBtn.hidden = !l.animated;
     slider.hidden = !l.animated;
     await loadLayerTimes();

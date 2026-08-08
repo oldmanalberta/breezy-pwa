@@ -20,7 +20,31 @@ const COLS = 13;          // grid samples across the view
 const ROWS = 11;
 const PARTICLES = 620;
 const MAX_AGE = 90;       // frames before a particle respawns
-const SPEED = 0.55;       // screen px per frame per km/h
+const SPEED = 1.15;       // screen px per frame per km/h
+
+/* Speed shading under the particles, on the same blue-to-red reading as the
+   precipitation scale: calm is blue, gale is red. Stops are km/h. */
+const SPEED_RAMP = [
+  [0,  [ 60, 110, 190]],
+  [10, [ 58, 158, 190]],
+  [20, [ 70, 178, 130]],
+  [30, [180, 190,  70]],
+  [45, [226, 160,  56]],
+  [65, [220, 100,  50]],
+  [90, [198,  52,  46]],
+];
+
+function rampRGB(kmh) {
+  if (kmh <= SPEED_RAMP[0][0]) return SPEED_RAMP[0][1];
+  for (let i = 0; i < SPEED_RAMP.length - 1; i++) {
+    const [v0, c0] = SPEED_RAMP[i], [v1, c1] = SPEED_RAMP[i + 1];
+    if (kmh <= v1) {
+      const t = (kmh - v0) / (v1 - v0);
+      return [0, 1, 2].map((k) => Math.round(c0[k] + (c1[k] - c0[k]) * t));
+    }
+  }
+  return SPEED_RAMP[SPEED_RAMP.length - 1][1];
+}
 
 /* windy-ish ramp: calm teal through green and yellow to red for gales */
 const RAMP = [
@@ -150,6 +174,41 @@ export function createWindLayer(canvas) {
     setField(f) {
       field = f;
       if (!parts.length) parts = Array.from({ length: PARTICLES }, spawn);
+    },
+
+    /* Speed shading, drawn once onto its own canvas beneath the particles.
+       The particle layer fades itself every frame to make trails, so this
+       cannot share that surface — it would be erased within a second.
+       Rendered at grid resolution and scaled up with smoothing, which is what
+       turns thirteen samples across into a continuous wash. */
+    renderSpeedField(target) {
+      if (!field) return;
+      const small = document.createElement('canvas');
+      small.width = field.cols;
+      small.height = field.rows;
+      const sctx = small.getContext('2d');
+      const img = sctx.createImageData(field.cols, field.rows);
+
+      for (let r = 0; r < field.rows; r++) {
+        for (let c = 0; c < field.cols; c++) {
+          const i = r * field.cols + c;
+          const kmh = Math.hypot(field.u[i], field.v[i]);
+          const [rr, gg, bb] = rampRGB(kmh);
+          // grid row 0 is the south edge; image row 0 is the north
+          const o = ((field.rows - 1 - r) * field.cols + c) * 4;
+          img.data[o] = rr; img.data[o + 1] = gg; img.data[o + 2] = bb;
+          img.data[o + 3] = 255;
+        }
+      }
+      sctx.putImageData(img, 0, 0);
+
+      target.width = Math.max(1, Math.round(W));
+      target.height = Math.max(1, Math.round(H));
+      const tctx = target.getContext('2d');
+      tctx.imageSmoothingEnabled = true;
+      tctx.imageSmoothingQuality = 'high';
+      tctx.clearRect(0, 0, target.width, target.height);
+      tctx.drawImage(small, 0, 0, target.width, target.height);
     },
 
     start() {

@@ -541,8 +541,38 @@ svg { width: 100%; height: 100%; fill: currentColor; display: block; }
 .rd-wind {
   position: absolute; inset: 0;
   width: 100%; height: 100%;
-  opacity: .85;
+  opacity: .9;
   pointer-events: none;
+}
+/* speed shading sits under the particles and stays well back so the map reads */
+.rd-wind-speed {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  opacity: .42;
+  pointer-events: none;
+  mix-blend-mode: multiply;
+}
+
+/* CWFIS renders smoke as a brown ramp. The ECCC style underneath is a
+   black-to-dark-red ramp over the same concentration range, so sepia rotates
+   the hue into that brown family while luminance keeps carrying the value. */
+.rd-frames.rd-smoke .rd-frame > img {
+  filter: sepia(1) saturate(2.2) brightness(1.15) contrast(1.15);
+}
+
+/* legend ramps drawn locally, for the overlays whose colours aren't ECCC's */
+.rd-legendramp { display: flex; gap: 8px; }
+.rd-legendramp[hidden] { display: none; }
+.rd-ramp { width: 26px; border-radius: 4px; min-height: 132px; }
+.rd-ramp-smoke { background: linear-gradient(to bottom, #3b2a1e, #7a5a3c, #b39672, #dccbb4); }
+.rd-ramp-wind {
+  background: linear-gradient(to bottom,
+    rgb(198,52,46), rgb(220,100,50), rgb(226,160,56),
+    rgb(180,190,70), rgb(70,178,130), rgb(58,158,190), rgb(60,110,190));
+}
+.rd-ramp-keys {
+  display: flex; flex-direction: column; justify-content: space-between;
+  font-size: 11px; font-weight: 600; line-height: 1;
 }
 
 /* the GL surface draws its own opacity in the shader */
