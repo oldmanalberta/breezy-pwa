@@ -405,6 +405,12 @@ function wire() {
   $('#scroll-cue').addEventListener('click', () =>
     $('#sheet').scrollIntoView({ behavior: 'smooth' }));
 
+  // retire the hint as soon as it has served its purpose
+  const cue = $('#scroll-cue');
+  window.addEventListener('scroll', () => {
+    cue.classList.toggle('gone', window.scrollY > 24);
+  }, { passive: true });
+
   // refresh when the app comes back to the foreground
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden && current && Date.now() - current.updated > 10 * 60e3) refresh({ silent: true });

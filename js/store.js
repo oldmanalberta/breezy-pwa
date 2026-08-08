@@ -14,6 +14,7 @@ const DEFAULTS = {
      defaulted to on in saved settings, and this needs to flip to the renderer
      that actually works on hardware where WebGL silently draws nothing. */
   radarRender: 'images',
+  radarLayer: 'precip',    // overlay: precip | smoke | wind
   dailyMode: 'conditions', // which series the daily panel charts
   order: null,             // card order; null means the default arrangement
   places: [],              // [{id,name,admin,cc,lat,lon,tz,current?:bool}]

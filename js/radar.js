@@ -17,6 +17,49 @@ const GEOMET = 'https://geo.weather.gc.ca/geomet';
 const RAIN = 'RADAR_1KM_RRAI';
 const SNOW = 'RADAR_1KM_RSNO';
 
+/* ── overlay layers ───────────────────────────────────
+ * Precipitation is the only one that animates: it is a 1 km radar composite
+ * published every six minutes. Smoke and wind are model output on an hourly
+ * step, so a loop of the last hour would show almost nothing moving — they
+ * render as a single current field instead, with playback disabled.
+ *
+ * On smoke specifically: firesmoke.ca (BlueSky Canada) has no public map
+ * service — every path returns the site's HTML — so there is nothing to
+ * consume directly. RAQDPS.SFC_PM2.5 is ECCC's own modelled surface PM2.5,
+ * the same quantity firesmoke.ca maps, on the same GeoMet service as the radar.
+ */
+export const LAYERS = {
+  precip: {
+    label: 'Precipitation',
+    wms: [RAIN, SNOW],
+    legend: RAIN,
+    legendTitle: 'Rain',
+    unit: 'mm/h',
+    animated: true,
+    icon: '<svg viewBox="0 0 24 24"><path d="M12 2.7s6 6.9 6 11a6 6 0 0 1-12 0c0-4.1 6-11 6-11z"/></svg>',
+  },
+  smoke: {
+    label: 'Smoke',
+    wms: ['RAQDPS.SFC_PM2.5'],
+    legend: 'RAQDPS.SFC_PM2.5',
+    legendTitle: 'Surface PM2.5',
+    unit: 'PM2.5',
+    animated: false,
+    icon: '<svg viewBox="0 0 24 24"><path d="M4 15h13a3 3 0 1 0-2.6-4.5A4.5 4.5 0 0 0 6 11.2 2 2 0 0 0 4 15zm1.5 3h10a1 1 0 0 1 0 2h-10a1 1 0 0 1 0-2zm3 3h8a1 1 0 0 1 0 2h-8a1 1 0 0 1 0-2z"/></svg>',
+  },
+  wind: {
+    label: 'Wind',
+    wms: ['HRDPS.CONTINENTAL_WSPD'],
+    legend: 'HRDPS.CONTINENTAL_WSPD',
+    legendTitle: 'Wind speed',
+    unit: 'm/s',
+    animated: false,
+    icon: '<svg viewBox="0 0 24 24"><path d="M3 8h11a2.5 2.5 0 1 0-2.5-2.5h-2A4.5 4.5 0 1 1 14 10H3zm0 4h16a2.5 2.5 0 1 1-2.5 2.5h-2A4.5 4.5 0 1 0 19 10H3zm0 5h8a2 2 0 1 1-2 2H7a4 4 0 1 0 4-4H3z"/></svg>',
+  },
+};
+
+export const currentLayer = () => LAYERS[state.radarLayer] ?? LAYERS.precip;
+
 const A = 20037508.342789244;          // half the Mercator world, in metres
 const TILE = 256;
 const MIN_Z = 3, MAX_Z = 11;
@@ -209,9 +252,11 @@ export function createRadar(host, { lat, lon, tz }) {
     <div class="rd-zoom">
       <button data-rd="in" aria-label="Zoom in">+</button>
       <button data-rd="out" aria-label="Zoom out">&minus;</button>
-      <button data-rd="theme" aria-label="Map theme" title="Map theme">
-        <svg viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 0 18zm0 2.2v13.6a6.8 6.8 0 0 1 0-13.6z"/></svg>
-      </button>
+    </div>
+    <div class="rd-layers" id="rd-layers">
+      ${Object.entries(LAYERS).map(([k, l]) =>
+        `<button class="rd-layer${k === state.radarLayer ? ' on' : ''}" data-layer="${k}"
+           aria-label="${l.label}" title="${l.label}">${l.icon}</button>`).join('')}
     </div>
     <div class="rd-bottom">
       <div class="rd-loading" id="rd-loading" hidden>
@@ -412,16 +457,53 @@ export function createRadar(host, { lat, lon, tz }) {
      runs through blank frames that read as "no precipitation" rather than
      "not downloaded yet". */
   async function drawFrames() {
-    const key = frameKey();
-    if (key === loadedFor || !frames.length || !W) return;
+    const layer = currentLayer();
+    const key = `${state.radarLayer}|${frameKey()}`;
+    if (key === loadedFor || !W) return;
+    if (layer.animated && !frames.length) return;
     loadedFor = key;
     const myKey = key;
 
     ready = false;
     if (playing) stop();
+    /* Drop the old imagery the moment a reload starts. It was rendered for the
+       previous extent, so once the map has moved it is showing precipitation in
+       the wrong place — worse than showing nothing, because it looks current. */
+    frameLayer.classList.add('reloading');
+
+    const bbox = currentBbox();
+
+    /* Smoke and wind are hourly model fields, not a scan loop — one current
+       image, no playback. Kept separate from the animated path because sharing
+       it would mean nine identical requests for the same forecast hour. */
+    if (!layer.animated) {
+      updateLoading(0, 1, `Loading ${layer.label.toLowerCase()}`);
+      const g = document.createElement('div');
+      g.className = 'rd-frame';
+      g.style.opacity = '1';
+      const waits = layer.wms.map((name) => new Promise((res) => {
+        const img = new Image();
+        img.alt = '';
+        img.decoding = 'async';
+        img.addEventListener('load', res, { once: true });
+        img.addEventListener('error', res, { once: true });
+        img.src = wmsUrl(name, bbox, W, H, null, RES_SCALE());
+        g.appendChild(img);
+      }));
+      await Promise.all(waits);
+      if (loadedFor !== myKey) return;
+
+      frameLayer.innerHTML = '';
+      frameLayer.appendChild(g);
+      setEmptyNotice(true);                 // the empty notice is radar-specific
+      ready = true;
+      frameLayer.classList.remove('reloading');
+      updateLoading(1, 1);
+      stamp.innerHTML = `${layer.label} <span class="rd-age">current model field</span>`;
+      return;
+    }
 
     const total = frames.length;
-    const bbox = currentBbox();
 
     /* ── image renderer (default) ──
        Plain <img> per layer per frame, exactly what the radar card does and the
@@ -465,6 +547,7 @@ export function createRadar(host, { lat, lon, tz }) {
       for (const g of groups) frameLayer.appendChild(g);
       setEmptyNotice(await echo);
       ready = true;
+      frameLayer.classList.remove('reloading');
       updateLoading(total, total);
       showFrame(idx, 0);
       return;
@@ -511,6 +594,7 @@ export function createRadar(host, { lat, lon, tz }) {
           glCanvas.remove();
         } else {
           ready = true;
+          frameLayer.classList.remove('reloading');
           updateLoading(1, 1);
           showFrame(idx, 0);
           return;
@@ -533,6 +617,7 @@ export function createRadar(host, { lat, lon, tz }) {
       frameLayer.appendChild(g);
     });
     ready = true;
+    frameLayer.classList.remove('reloading');
     updateLoading(total, total);
     showFrame(idx, 0);
   }
@@ -581,6 +666,31 @@ export function createRadar(host, { lat, lon, tz }) {
     const age = mins < 1 ? 'just now' : mins === 1 ? '1 min ago' : `${mins} min ago`;
     const newest = idx === frames.length - 1;
     stamp.innerHTML = `${time} <span class="rd-age">${newest ? `latest · ${age}` : age}</span>`;
+  }
+
+  function setLayer(key) {
+    if (key === state.radarLayer) return;
+    set('radarLayer', key);
+    host.querySelectorAll('[data-layer]').forEach((b) =>
+      b.classList.toggle('on', b.dataset.layer === key));
+
+    const l = LAYERS[key];
+    host.querySelector('.rd-legendbtn').textContent = l.unit;
+    host.querySelector('#rd-legendbox img').src = legendUrl(l.legend);
+    host.querySelector('.rd-legendhead').innerHTML =
+      `${l.legendTitle}<span>${l.unit}</span>`;
+    host.querySelector('.rd-title b').textContent = l.label;
+
+    // only the radar composite has scans to step through
+    slider.disabled = !l.animated;
+    playBtn.hidden = !l.animated;
+    slider.hidden = !l.animated;
+    stop();
+
+    emptyDismissed = false;
+    setEmptyNotice(true);
+    loadedFor = null;
+    drawFrames();
   }
 
   function setBasemap(key) {
@@ -766,11 +876,8 @@ export function createRadar(host, { lat, lon, tz }) {
     const mapKey = e.target.closest('[data-map]')?.dataset.map;
     if (mapKey && BASEMAPS[mapKey]) { setBasemap(mapKey); return; }
 
-    if (act === 'theme') {
-      // cycle through the base maps in declaration order
-      const keys = Object.keys(BASEMAPS);
-      setBasemap(keys[(keys.indexOf(state.mapTheme) + 1) % keys.length]);
-    }
+    const layerKey = e.target.closest('[data-layer]')?.dataset.layer;
+    if (layerKey && LAYERS[layerKey]) { setLayer(layerKey); return; }
     if (act === 'dismiss-empty') {
       emptyDismissed = true;
       host.querySelector('#rd-empty').hidden = true;
