@@ -38,8 +38,10 @@
     </div>
 
     <div class="hero-main">
-      <div class="hero-icon" id="hero-icon"></div>
-      <div class="hero-temp" id="hero-temp">--<span class="deg">°</span></div>
+      <div class="hero-now">
+        <div class="hero-icon" id="hero-icon"></div>
+        <div class="hero-temp" id="hero-temp">--<span class="deg">°</span></div>
+      </div>
       <div class="hero-cond" id="hero-cond">—</div>
       <div class="hero-range" id="hero-range"></div>
     </div>
@@ -122,6 +124,13 @@
       <button data-v="light">Light <em>Minimal, pale</em></button>
       <button data-v="dark">Dark <em>Minimal, dark</em></button>
     </div>
+  </div>
+  <div class="setting">
+    <label>Radar motion</label>
+    <div class="seg" id="seg-radarflow">
+      <button data-v="on" class="on">Smooth</button><button data-v="off">Stepped</button>
+    </div>
+    <p class="tiny pad" style="margin-top:8px">Smooth tracks how precipitation is moving between scans and fills in the frames between. Needs WebGL2.</p>
   </div>
   <div class="setting">
     <label>Card order</label>

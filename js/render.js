@@ -114,8 +114,8 @@ export function hourlyCard(data) {
    Weather uses. Every mode reuses one renderer; a mode just declares how to
    pull its numbers out of a day and how to label them. */
 
-const COL = 74;          // px per day column
-const CHART_H = 132;     // px of chart between the day and night icons
+const COL = 72;          // px per day column
+const CHART_H = 114;     // px of chart between the day and night icons
 
 export const DAILY_MODES = {
   conditions: {

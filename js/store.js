@@ -9,6 +9,7 @@ const DEFAULTS = {
   source: 'auto',
   fx: 'on',
   mapTheme: 'terrain',     // radar base map key, see BASEMAPS in radar.js
+  radarFlow: 'on',         // motion interpolation between radar scans
   dailyMode: 'conditions', // which series the daily panel charts
   order: null,             // card order; null means the default arrangement
   places: [],              // [{id,name,admin,cc,lat,lon,tz,current?:bool}]

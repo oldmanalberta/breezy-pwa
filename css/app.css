@@ -96,7 +96,7 @@ svg { width: 100%; height: 100%; fill: currentColor; display: block; }
    screen when a location opens, rather than hidden below the fold. */
 .hero {
   position: relative;
-  min-height: 80svh;
+  min-height: 47svh;
   padding: 0 20px;
   display: flex; flex-direction: column;
   color: #fff;
@@ -111,17 +111,19 @@ svg { width: 100%; height: 100%; fill: currentColor; display: block; }
   display: flex; align-items: center; justify-content: space-between;
 }
 
+/* Sits clear of an iOS notification banner, which covers roughly the top
+   120pt and would otherwise hide the location name. */
 .hero-place {
-  margin-top: 10svh;
+  margin-top: 20svh;
   text-align: center;
   min-width: 0;
 }
 .hero-place h1 {
-  margin: 0; font-size: 27px; font-weight: 400; letter-spacing: -.01em;
+  margin: 0; font-size: 26px; font-weight: 400; letter-spacing: -.01em;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .hero-place p {
-  margin: 4px 0 0; font-size: 13px; font-weight: 300; opacity: .85;
+  margin: 3px 0 0; font-size: 12.5px; font-weight: 300; opacity: .85;
 }
 
 .icon-btn {
@@ -138,19 +140,25 @@ svg { width: 100%; height: 100%; fill: currentColor; display: block; }
   flex: 1;
   display: flex; flex-direction: column;
   align-items: center; justify-content: center;
-  padding-bottom: 2svh;
+  padding-bottom: 0;
 }
 
-.hero-icon { width: 118px; height: 118px; margin-bottom: 2px; }
+/* icon beside the temperature rather than above it — stacking them cost
+   about 100px of height the 7-day card needs */
+.hero-now {
+  display: flex; align-items: center; justify-content: center;
+  gap: 6px; margin-top: 6px;
+}
+.hero-icon { width: 78px; height: 78px; flex: none; }
 
 .hero-temp {
-  font-size: clamp(72px, 22vw, 108px);
-  font-weight: 700; line-height: .95; letter-spacing: -.04em;
+  font-size: clamp(64px, 19vw, 92px);
+  font-weight: 700; line-height: .92; letter-spacing: -.04em;
 }
 .hero-temp .deg { font-weight: 700; opacity: .5; }
 
-.hero-cond { font-size: 19px; font-weight: 400; margin-top: 8px; text-align: center; }
-.hero-range { font-size: 15px; opacity: .88; margin-top: 6px; font-weight: 300; }
+.hero-cond { font-size: 18px; font-weight: 400; margin-top: 4px; text-align: center; }
+.hero-range { font-size: 14px; opacity: .88; margin-top: 4px; font-weight: 300; }
 
 /* location pager dots */
 .place-dots {
@@ -247,19 +255,21 @@ svg { width: 100%; height: 100%; fill: currentColor; display: block; }
 
 /* daily panel (tabbed, horizontally scrolling) */
 .dp-summary {
-  margin: 0 0 12px; font-size: 13.5px; line-height: 1.5;
+  margin: 0 0 9px; font-size: 13px; line-height: 1.45;
   color: var(--on-surface-var);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 .dp-pills {
-  display: flex; gap: 7px; margin: 0 -18px 14px; padding: 2px 18px;
+  display: flex; gap: 6px; margin: 0 -18px 10px; padding: 2px 18px;
   overflow-x: auto; -webkit-overflow-scrolling: touch;
 }
 .dp-pills::-webkit-scrollbar { display: none; }
 .dp-pill {
   flex: none; border: 0; border-radius: 999px;
-  padding: 9px 15px; cursor: pointer;
+  padding: 7px 13px; cursor: pointer;
   background: var(--surface-2); color: var(--on-surface-var);
-  font: inherit; font-size: 13px; font-weight: 600; white-space: nowrap;
+  font: inherit; font-size: 12.5px; font-weight: 600; white-space: nowrap;
   transition: background 160ms var(--ease), color 160ms var(--ease);
 }
 .dp-pill.on { background: var(--accent); color: #06121f; }
@@ -271,14 +281,14 @@ svg { width: 100%; height: 100%; fill: currentColor; display: block; }
   flex: none; width: 74px;
   display: flex; flex-direction: column; align-items: center; gap: 3px;
 }
-.dp-col b { font-size: 13.5px; font-weight: 600; }
+.dp-col b { font-size: 13px; font-weight: 600; }
 .dp-col em {
-  font-style: normal; font-size: 11px; font-weight: 500;
+  font-style: normal; font-size: 10.5px; font-weight: 500;
   color: var(--on-surface-var);
 }
-.dp-ico { width: 30px; height: 30px; margin-top: 3px; color: var(--on-surface-var); }
+.dp-ico { width: 27px; height: 27px; margin-top: 2px; color: var(--on-surface-var); }
 .dp-ico.dim { opacity: .72; }
-.dp-pop { font-size: 11.5px; font-weight: 700; color: var(--accent-ink); min-height: 16px; }
+.dp-pop { font-size: 11px; font-weight: 700; color: var(--accent-ink); min-height: 15px; }
 .dp-chart { display: block; color: var(--on-surface); }
 .dp-chart .dp-lo { opacity: .55; }
 
@@ -482,20 +492,27 @@ svg { width: 100%; height: 100%; fill: currentColor; display: block; }
   width: 256px; height: 256px;
   transform-origin: 0 0;
 }
-/* Long cross-fade relative to the frame interval: consecutive radar scans
-   blend into each other instead of cutting, which reads as movement rather
-   than a slideshow. */
+/* Cross-fade is only the fallback now — when WebGL2 is available the radar is
+   a single canvas that warps between scans instead. */
 .rd-frame {
   position: absolute; inset: 0;
   transition: opacity 460ms cubic-bezier(.4, 0, .6, 1);
 }
-.rd-frame img {
+.rd-frame > canvas,
+.rd-frame > img {
   position: absolute; inset: 0; width: 100%; height: 100%;
-  /* the composite is 1 km cells; soften the stair-stepping and lift the
-     weaker returns so light precipitation is actually visible */
-  filter: blur(2.5px) saturate(1.25) contrast(1.08);
-  opacity: .82;
+  /* Only a whisper of softening: the imagery is fetched at device pixel ratio
+     and the GPU already samples it bilinearly, so heavy blur just smears it. */
+  filter: saturate(1.18) contrast(1.05);
+  opacity: .88;
   will-change: opacity;
+}
+
+/* the GL surface draws its own opacity in the shader */
+.rd-gl {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  filter: saturate(1.12);
 }
 
 .rd-pin {

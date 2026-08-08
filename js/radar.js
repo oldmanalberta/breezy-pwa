@@ -11,6 +11,7 @@
  */
 
 import { state, set } from './store.js';
+import { hasWebGL2, createFlowRenderer } from './flow.js';
 
 const GEOMET = 'https://geo.weather.gc.ca/geomet';
 const RAIN = 'RADAR_1KM_RRAI';
@@ -163,6 +164,18 @@ export function createRadar(host, { lat, lon, tz }) {
   let cx = lonToWorld(lon, z), cy = latToWorld(lat, z);   // centre, world px
   let W = 0, H = 0;
   let frames = [], idx = 0, playing = false, timer = null, loadedFor = null, ready = false;
+  let raf = null;
+
+  /* Motion interpolation needs WebGL2; without it we fall back to the
+     cross-fade path, which still works everywhere. */
+  let useFlow = state.radarFlow !== 'off' && hasWebGL2();
+  const glCanvas = document.createElement('canvas');
+  glCanvas.className = 'rd-gl';
+  let flowR = null;
+  if (useFlow) {
+    try { flowR = createFlowRenderer(glCanvas); useFlow = !!flowR; }
+    catch (e) { console.warn('WebGL2 radar unavailable', e); useFlow = false; }
+  }
 
   host.innerHTML = `
     <div class="rd-map" id="rd-map">
@@ -260,50 +273,92 @@ export function createRadar(host, { lat, lon, tz }) {
   /* ── radar frames ── */
   function frameKey() { return `${z}|${Math.round(cx)}|${Math.round(cy)}|${Math.round(W)}x${Math.round(H)}`; }
 
-  /* Every frame is two WMS images (rain + snow). Animation must not start until
-     they have all arrived, otherwise Play runs through blank frames that look
-     like "no precipitation" rather than "not downloaded yet". */
-  function drawFrames() {
+  /* Fetch one time step's rain and snow layers and merge them into a single
+     canvas. Going through fetch + createImageBitmap (rather than an <img>)
+     keeps the result CORS-clean so WebGL can sample it — GeoMet sends
+     Access-Control-Allow-Origin: *. */
+  async function loadComposite(bbox, iso, scale) {
+    const [rain, snow] = await Promise.all([RAIN, SNOW].map(async (layer) => {
+      try {
+        const r = await fetch(wmsUrl(layer, bbox, W, H, iso, scale));
+        if (!r.ok) return null;
+        return await createImageBitmap(await r.blob());
+      } catch { return null; }
+    }));
+
+    const w = Math.min(2048, Math.round(W * scale));
+    const h = Math.min(2048, Math.round(H * scale));
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    const ctx = c.getContext('2d');
+    if (rain) { ctx.drawImage(rain, 0, 0, w, h); rain.close?.(); }
+    if (snow) { ctx.drawImage(snow, 0, 0, w, h); snow.close?.(); }
+    return c;
+  }
+
+  /* Animation must not start until every frame has arrived, otherwise Play
+     runs through blank frames that read as "no precipitation" rather than
+     "not downloaded yet". */
+  async function drawFrames() {
     const key = frameKey();
     if (key === loadedFor || !frames.length || !W) return;
     loadedFor = key;
+    const myKey = key;
 
-    const bbox = currentBbox();
-    const total = frames.length * 2;
-    let done = 0;
     ready = false;
     if (playing) stop();
-    updateLoading(0, total);
 
-    const settled = () => {
-      done++;
-      updateLoading(done, total);
-      if (done >= total) {
+    const total = frames.length;
+    updateLoading(0, total, 'Loading radar');
+
+    // Flow interpolation holds every frame in GPU memory, so cap the texture
+    // size rather than pushing full 2x on a large viewport.
+    const scale = useFlow
+      ? Math.min(RES_SCALE(), 1400 / Math.max(W, H))
+      : RES_SCALE();
+
+    const bbox = currentBbox();
+    const composites = [];
+    for (let i = 0; i < frames.length; i++) {
+      const iso = frames[i].toISOString().replace(/\.\d+Z$/, 'Z');
+      composites.push(await loadComposite(bbox, iso, Math.max(1, scale)));
+      if (loadedFor !== myKey) return;          // a pan/zoom superseded this load
+      updateLoading(i + 1, total, 'Loading radar');
+    }
+
+    if (useFlow && flowR) {
+      try {
+        updateLoading(0, 1, 'Tracking motion');
+        await flowR.build(composites, (p) => updateLoading(p, 1, 'Tracking motion'));
+        if (loadedFor !== myKey) return;
+        frameLayer.innerHTML = '';
+        frameLayer.appendChild(glCanvas);
         ready = true;
-        updateLoading(total, total);
+        updateLoading(1, 1);
+        showFrame(idx, 0);
+        return;
+      } catch (e) {
+        console.warn('flow renderer failed, falling back to cross-fade', e);
+        useFlow = false;
       }
-    };
+    }
 
+    // Fallback: stack the composited frames and cross-fade between them.
     frameLayer.innerHTML = '';
-    frames.forEach((t, i) => {
-      const iso = t.toISOString().replace(/\.\d+Z$/, 'Z');
+    composites.forEach((c, i) => {
       const g = document.createElement('div');
       g.className = 'rd-frame';
       g.style.opacity = i === idx ? '1' : '0';
-      for (const layer of [RAIN, SNOW]) {
-        const img = new Image();
-        img.alt = '';
-        // count errors too, or one dead tile would stall the loader forever
-        img.addEventListener('load', settled, { once: true });
-        img.addEventListener('error', settled, { once: true });
-        img.src = wmsUrl(layer, bbox, W, H, iso, RES_SCALE());
-        g.appendChild(img);
-      }
+      c.style.cssText = 'position:absolute;inset:0;width:100%;height:100%';
+      g.appendChild(c);
       frameLayer.appendChild(g);
     });
+    ready = true;
+    updateLoading(total, total);
+    showFrame(idx, 0);
   }
 
-  function updateLoading(done, total) {
+  function updateLoading(done, total, label = 'Loading radar') {
     const bar = host.querySelector('#rd-loading');
     if (!bar) return;
     if (done >= total) {
@@ -314,15 +369,23 @@ export function createRadar(host, { lat, lon, tz }) {
     }
     bar.hidden = false;
     bar.querySelector('.rd-loadtext').textContent =
-      `Loading radar… ${Math.round((done / total) * 100)}%`;
+      `${label}… ${Math.round((done / total) * 100)}%`;
     bar.querySelector('.rd-loadfill').style.width = `${(done / total) * 100}%`;
     playBtn.disabled = true;
     playBtn.setAttribute('aria-disabled', 'true');
   }
 
-  function showFrame(i) {
+  /* `frac` is how far past frame `i` we are, 0..1. In flow mode that drives
+     the GPU warp; in fallback mode only whole frames exist so it is ignored. */
+  function showFrame(i, frac = 0) {
     idx = Math.max(0, Math.min(frames.length - 1, i));
-    [...frameLayer.children].forEach((g, k) => { g.style.opacity = k === idx ? '1' : '0'; });
+
+    if (useFlow && flowR && ready) {
+      flowR.draw(idx, frac);
+    } else {
+      [...frameLayer.children].forEach((g, k) => { g.style.opacity = k === idx ? '1' : '0'; });
+    }
+
     slider.value = String(idx);
     const t = frames[idx];
     if (t) {
@@ -468,17 +531,40 @@ export function createRadar(host, { lat, lon, tz }) {
   function stop() {
     playing = false;
     clearInterval(timer);
+    if (raf) cancelAnimationFrame(raf);
+    raf = null;
     playBtn.classList.remove('on');
     playBtn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>';
   }
+
   function play() {
     if (frames.length < 2 || !ready) return;
     playing = true;
     playBtn.classList.add('on');
     playBtn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M6 5h4v14H6zm8 0h4v14h-4z"/></svg>';
     clearInterval(timer);
-    // Slower than the cross-fade duration so frames blend continuously rather
-    // than snapping — the difference between a slideshow and apparent motion.
+    if (raf) cancelAnimationFrame(raf);
+
+    if (useFlow && flowR) {
+      /* Advance a continuous cursor and render the interpolated moment on every
+         animation frame, so motion is genuinely smooth rather than stepped. */
+      let pos = idx;
+      let last = performance.now();
+      const STEP_PER_SEC = 1 / 0.9;         // ~0.9s of wall clock per radar scan
+
+      const tick = (now) => {
+        if (!playing) return;
+        pos += ((now - last) / 1000) * STEP_PER_SEC;
+        last = now;
+        if (pos >= frames.length - 1) pos = 0;
+        showFrame(Math.floor(pos), pos - Math.floor(pos));
+        raf = requestAnimationFrame(tick);
+      };
+      raf = requestAnimationFrame(tick);
+      return;
+    }
+
+    // Fallback: step whole frames and let CSS cross-fade cover the gap.
     timer = setInterval(() => {
       showFrame(idx >= frames.length - 1 ? 0 : idx + 1);
     }, 620);
@@ -528,6 +614,11 @@ export function createRadar(host, { lat, lon, tz }) {
   })();
 
   return {
-    destroy() { stop(); ro.disconnect(); host.innerHTML = ''; },
+    destroy() {
+      stop();
+      ro.disconnect();
+      try { flowR?.destroy(); } catch { /* context may already be gone */ }
+      host.innerHTML = '';
+    },
   };
 }

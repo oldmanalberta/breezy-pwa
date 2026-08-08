@@ -393,6 +393,7 @@ function wire() {
   seg('#seg-source', 'source', () => { current = null; refresh(); });
   seg('#seg-fx', 'fx', () => current && startFx($('#fx'), fxKind(current.current.condition), state.fx === 'on'));
   seg('#seg-maptheme', 'mapTheme', () => { if (current) paint(current, activePlace()); });
+  seg('#seg-radarflow', 'radarFlow');
 
   renderOrder();
   $('#order-list').addEventListener('click', (e) => {

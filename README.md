@@ -32,8 +32,10 @@ account, and no 7-day expiry.
   Playback is held until every frame has downloaded, so the animation never
   runs through blank frames. Five base maps — Terrain (default, shows roads
   and towns), Streets, Satellite, Light, Dark. Imagery is requested at the
-  device pixel ratio and cross-faded between frames so motion reads as
-  continuous rather than as a slideshow.
+  device pixel ratio. **Motion interpolation** estimates where precipitation is
+  actually travelling between the 6-minute scans and renders the moments in
+  between on the GPU, so a moving cell slides rather than dissolving. Falls
+  back to cross-fading where WebGL2 is unavailable.
 - **Weather alerts** — active ECCC warnings and watches, colour-coded by risk,
   tap to expand the full bulletin.
 - **Canadian AQHI** — the actual Air Quality Health Index Canadians use, not a
@@ -174,6 +176,7 @@ js/render.js            card renderers
 js/icons.js             SVG weather icons, condition mapping, sky palettes
 js/fx.js                canvas rain/snow/stars/cloud effects
 js/radar.js             radar map: projection, WMS urls, pan/zoom, animation
+js/flow.js              radar motion estimation + WebGL warp/blend renderer
 js/store.js             localStorage settings, places, forecast cache
 js/sources/index.js     source dispatcher and fallback logic
 js/sources/eccc.js      Environment and Climate Change Canada adapter
