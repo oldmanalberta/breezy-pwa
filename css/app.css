@@ -543,11 +543,20 @@ svg { width: 100%; height: 100%; fill: currentColor; display: block; }
   border-radius: var(--r-lg); padding: 16px 18px;
   backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
   box-shadow: 0 6px 26px rgba(0, 0, 0, .45);
+  /* the card itself stays transparent to drags so you can still pan the map
+     underneath it; only the dismiss button takes input */
   pointer-events: none;
 }
 .rd-empty[hidden] { display: none; }
 .rd-empty b { display: block; font-size: 15px; font-weight: 600; margin-bottom: 5px; }
 .rd-empty span { font-size: 12.5px; line-height: 1.5; opacity: .85; }
+.rd-empty-x {
+  pointer-events: auto;
+  margin-top: 12px; border: 0; border-radius: 999px;
+  padding: 9px 20px; cursor: pointer;
+  background: #fff; color: #0b1420;
+  font: inherit; font-size: 13px; font-weight: 700;
+}
 
 .rd-pin {
   position: absolute; top: 0; left: 0;

@@ -169,6 +169,9 @@ export function createRadar(host, { lat, lon, tz }) {
   let W = 0, H = 0;
   let frames = [], idx = 0, playing = false, timer = null, loadedFor = null, ready = false;
   let raf = null;
+  /* Once you've been told the sky is clear, being told again on every pan is
+     just something in the way while you hunt for weather elsewhere. */
+  let emptyDismissed = false;
 
   /* Images are the default renderer because they are the ones that reliably
      work: the same mechanism drives the card, which renders correctly on
@@ -194,6 +197,7 @@ export function createRadar(host, { lat, lon, tz }) {
       <div class="rd-empty" id="rd-empty" hidden>
         <b>Little or no precipitation in view</b>
         <span>The radar is working — there is simply nothing falling here right now. Zoom out to look further afield.</span>
+        <button class="rd-empty-x" data-rd="dismiss-empty">Got it</button>
       </div>
     </div>
     <div class="rd-top">
@@ -354,6 +358,10 @@ export function createRadar(host, { lat, lon, tz }) {
     return c;
   }
 
+  const setEmptyNotice = (anyEcho) => {
+    host.querySelector('#rd-empty').hidden = anyEcho || emptyDismissed;
+  };
+
   /* Is there any worthwhile echo in this view? One small request answers it,
      which is all the empty-state notice needs — the image renderer never reads
      pixels back, so there is nothing else to inspect. Returns true when there
@@ -455,7 +463,7 @@ export function createRadar(host, { lat, lon, tz }) {
       if (loadedFor !== myKey) return;
       frameLayer.innerHTML = '';
       for (const g of groups) frameLayer.appendChild(g);
-      host.querySelector('#rd-empty').hidden = await echo;
+      setEmptyNotice(await echo);
       ready = true;
       updateLoading(total, total);
       showFrame(idx, 0);
@@ -479,7 +487,7 @@ export function createRadar(host, { lat, lon, tz }) {
        apparently broken map. Anything under a third of a percent of the view
        counts as nothing worth showing. */
     const anyEcho = composites.some((c) => c.echoPct > 0.3);
-    host.querySelector('#rd-empty').hidden = anyEcho;
+    setEmptyNotice(anyEcho);
 
     if (useFlow && flowR) {
       try {
@@ -762,6 +770,10 @@ export function createRadar(host, { lat, lon, tz }) {
       // cycle through the base maps in declaration order
       const keys = Object.keys(BASEMAPS);
       setBasemap(keys[(keys.indexOf(state.mapTheme) + 1) % keys.length]);
+    }
+    if (act === 'dismiss-empty') {
+      emptyDismissed = true;
+      host.querySelector('#rd-empty').hidden = true;
     }
     if (act === 'legend') {
       const box = host.querySelector('#rd-legendbox');

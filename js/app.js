@@ -490,6 +490,16 @@ async function boot() {
       // be answered from cache and a new worker goes unnoticed for ten minutes.
       const reg = await navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' });
       reg.update().catch(() => {});
+
+      /* When a new worker takes over, the page is still running the old code it
+         was loaded with. Reload once so the update actually applies on this
+         launch rather than the next one — which on an installed PWA can be days
+         away. The sessionStorage guard stops this becoming a reload loop. */
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (sessionStorage.getItem('breezy.swReloaded')) return;
+        sessionStorage.setItem('breezy.swReloaded', '1');
+        location.reload();
+      });
     } catch (e) { console.warn('SW registration failed', e); }
   }
 }
