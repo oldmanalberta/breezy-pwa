@@ -319,8 +319,24 @@ export function airCard(data) {
     ? `<div class="s" style="margin-top:8px;color:var(--on-surface-var);font-size:12.5px">${esc(a.station)}${a.time ? ` · ${timeLabel(a.time, data.tz)}` : ''}</div>`
     : '';
 
+  /* If the primary reading is Canada's AQHI, show the US AQI beside it. They
+     are not interchangeable — AQHI is a health-risk score from three pollutants
+     on a 1–10+ scale, US AQI is the worst single pollutant on 0–500 — and the
+     US number is what most other apps report, so having both saves guessing at
+     which scale a figure is on. */
+  const us = data.airUs && a.scale === 'AQHI' && data.airUs.index != null ? data.airUs : null;
+  const second = us ? `
+    <div class="aq-second">
+      <span class="aq-face">${aqiFace(us.index)}</span>
+      <div>
+        <b>${us.index} <span>US AQI</span></b>
+        <div class="s">${esc(us.category)}</div>
+      </div>
+    </div>` : '';
+
   return card(a.scale === 'AQHI' ? 'Air quality health index' : 'Air quality', G.leaf, `
     <div class="aq-head">
+      <span class="aq-face aq-face-lg">${aqiFace(a.scale === 'AQHI' ? aqhiToAqi(a.index) : a.index)}</span>
       <div class="aq-val">${a.index}</div>
       <div>
         <div class="aq-cat">${esc(a.category)}</div>
@@ -328,7 +344,35 @@ export function airCard(data) {
       </div>
     </div>
     <div class="aq-scale"><i style="left:${pct.toFixed(1)}%"></i></div>
-    ${sub}${poll}`);
+    ${second}${sub}${poll}`);
+}
+
+/* Rough AQHI→AQI bridge, used only to pick which face to draw so the two
+   readings don't contradict each other visually. Not shown as a number. */
+const aqhiToAqi = (v) => (v <= 3 ? 40 : v <= 6 ? 90 : v <= 10 ? 140 : 200);
+
+/* Face icons on the US AQI bands: good, moderate, unhealthy for sensitive
+   groups, unhealthy, very unhealthy, hazardous. */
+function aqiFace(aqi) {
+  const band = aqi <= 50 ? 0 : aqi <= 100 ? 1 : aqi <= 150 ? 2 : aqi <= 200 ? 3 : aqi <= 300 ? 4 : 5;
+  const fill = ['#3ec46d', '#f5c518', '#f5983b', '#e4573d', '#a457c4', '#8d3646'][band];
+  // mouth: smile, flat, slight frown, frown, deep frown, grimace
+  const mouth = [
+    'M8.2 14.4a4.6 4.6 0 0 0 7.6 0',
+    'M8.4 14.6h7.2',
+    'M8.2 15.4a4.6 4.6 0 0 1 7.6 0',
+    'M8 15.8a5 5 0 0 1 8 0',
+    'M8 16.2a5 5 0 0 1 8 0',
+    'M8 16.4a5 5 0 0 1 8 0',
+  ][band];
+  const eyes = band >= 4
+    ? '<path d="M8.1 9.4 10.9 11M10.9 9.4 8.1 11M13.1 9.4 15.9 11M15.9 9.4 13.1 11" stroke="#0b1420" stroke-width="1.3" stroke-linecap="round" fill="none"/>'
+    : '<circle cx="9.3" cy="10.2" r="1.25" fill="#0b1420"/><circle cx="14.7" cy="10.2" r="1.25" fill="#0b1420"/>';
+  return `<svg viewBox="0 0 24 24" aria-hidden="true">
+    <circle cx="12" cy="12" r="11" fill="${fill}"/>
+    ${eyes}
+    <path d="${mouth}" stroke="#0b1420" stroke-width="1.5" stroke-linecap="round" fill="none"/>
+  </svg>`;
 }
 
 /* ── radar ────────────────────────────────────────── */

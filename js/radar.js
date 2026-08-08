@@ -49,17 +49,16 @@ export const LAYERS = {
        dark red wash or a purple-heavy 0–500 scale that leaves ordinary smoke
        events almost invisible. firesmoke.ca's own palette could not be used
        directly — the site publishes no data service and no colour table. */
-    /* The Canadian Wildland Fire Information System renders smoke as a single
-       brown ramp over 1.0e-9 to 2.5e-7 kg/m³ — and that range is exactly what
-       this ECCC style covers, so the value mapping needs no interpretation.
-       Its own colours are a black-to-dark-red ramp rather than CWFIS brown, so
-       the tint is applied in CSS (see .rd-smoke): the luminance still carries
-       the concentration, only the hue changes. CWFIS publishes no colour table
-       either, so this matches their look rather than copying their values. */
-    style: 'PM2.5_1e-9to2.5e-7kgm3',
-    cwfisTint: true,
-    legendTitle: 'Peak PM2.5',
-    unit: 'kg/m³',
+    /* ECCC's own discrete ramp: pale cyan at trace levels through blue, yellow
+       and orange to red, with its resolution concentrated in the low range
+       where smoke actually matters. The CWFIS brown was tried here and pulled
+       back out — a single-hue earth tone over terrain and satellite base maps
+       is nearly indistinguishable from the ground beneath it, whereas the
+       blue-to-red ramp separates cleanly from every base map on offer. */
+    style: 'PM2.5_0to100ugm3_Dis',
+    legend: 'RAQDPS.SFC_PM2.5',
+    legendTitle: 'Surface PM2.5',
+    unit: 'µg/m³',
     animated: true,
     timeMode: 'future',        // a forecast loop, like firesmoke.ca's
     frames: 12,
@@ -69,18 +68,18 @@ export const LAYERS = {
     opacity: 0.38,
     icon: '<svg viewBox="0 0 24 24"><path d="M4 15h13a3 3 0 1 0-2.6-4.5A4.5 4.5 0 0 0 6 11.2 2 2 0 0 0 4 15zm1.5 3h10a1 1 0 0 1 0 2h-10a1 1 0 0 1 0-2zm3 3h8a1 1 0 0 1 0 2h-8a1 1 0 0 1 0-2z"/></svg>',
   },
-  wind: {
-    label: 'Wind',
-    /* Drawn as moving particles rather than a WMS image — see js/wind.js.
-       GeoMet only styles this layer as arrows and barbs, which is a static
-       picture of a moving thing. */
-    particles: true,
-    legendTitle: 'Wind speed',
-    unit: 'km/h',
-    animated: false,
-    icon: '<svg viewBox="0 0 24 24"><path d="M3 8h11a2.5 2.5 0 1 0-2.5-2.5h-2A4.5 4.5 0 1 1 14 10H3zm0 4h16a2.5 2.5 0 1 1-2.5 2.5h-2A4.5 4.5 0 1 0 19 10H3zm0 5h8a2 2 0 1 1-2 2H7a4 4 0 1 0 4-4H3z"/></svg>',
-  },
 };
+
+/* Wind sits outside LAYERS on purpose. It is not an alternative to seeing rain
+   or smoke — it is the thing that explains where they are going, so it belongs
+   on top of them rather than instead of them. Its button cycles three ways.
+   Drawn as moving particles (see js/wind.js) because GeoMet styles wind only as
+   arrows and barbs, which is a static picture of a moving thing. */
+export const WIND_MODES = ['off', 'particles', 'full'];
+export const WIND_ICON =
+  '<svg viewBox="0 0 24 24"><path d="M3 8h11a2.5 2.5 0 1 0-2.5-2.5h-2A4.5 4.5 0 1 1 14 10H3zm0 4h16a2.5 2.5 0 1 1-2.5 2.5h-2A4.5 4.5 0 1 0 19 10H3zm0 5h8a2 2 0 1 1-2 2H7a4 4 0 1 0 4-4H3z"/></svg>';
+export const windLabel = (m) =>
+  m === 'particles' ? 'Wind on' : m === 'full' ? 'Wind + speed shading' : 'Wind off';
 
 export const currentLayer = () => LAYERS[state.radarLayer] ?? LAYERS.precip;
 
@@ -265,11 +264,7 @@ export function createRadar(host, { lat, lon, tz }) {
   /* Once you've been told the sky is clear, being told again on every pan is
      just something in the way while you hunt for weather elsewhere. */
   let emptyDismissed = false;
-  let windLayer = null;
-  const windSpeedCanvas = document.createElement('canvas');
-  windSpeedCanvas.className = 'rd-wind-speed';
-  const windCanvas = document.createElement('canvas');
-  windCanvas.className = 'rd-wind';
+  let windLayer = null, windLoading = false, windKey = null;
 
   /* Images are the default renderer because they are the ones that reliably
      work: the same mechanism drives the card, which renders correctly on
@@ -291,6 +286,9 @@ export function createRadar(host, { lat, lon, tz }) {
     <div class="rd-map" id="rd-map">
       <div class="rd-tiles"></div>
       <div class="rd-frames"></div>
+      <!-- wind rides above the data overlay and outlives its reloads -->
+      <canvas class="rd-wind-speed" id="rd-wind-speed" hidden></canvas>
+      <canvas class="rd-wind" id="rd-wind" hidden></canvas>
       <div class="rd-pin" title="Your location"></div>
       <div class="rd-empty" id="rd-empty" hidden>
         <b>Little or no precipitation in view</b>
@@ -312,6 +310,8 @@ export function createRadar(host, { lat, lon, tz }) {
       ${Object.entries(LAYERS).map(([k, l]) =>
         `<button class="rd-layer${k === state.radarLayer ? ' on' : ''}" data-layer="${k}"
            aria-label="${l.label}" title="${l.label}">${l.icon}</button>`).join('')}
+      <button class="rd-layer rd-windbtn" id="rd-windbtn" data-rd="wind"
+        aria-label="Wind overlay">${WIND_ICON}<i class="rd-winddot"></i></button>
     </div>
     <div class="rd-bottom">
       <div class="rd-loading" id="rd-loading" hidden>
@@ -331,10 +331,11 @@ export function createRadar(host, { lat, lon, tz }) {
       </div>
       <p class="rd-attrib" id="rd-attrib"></p>
     </div>
-    <div class="rd-legendbox" id="rd-legendbox" hidden>
+    <div class="rd-legendbox" id="rd-legendbox" data-rd="close-legend" hidden>
       <div class="rd-legendhead">Rain<span>mm/h</span></div>
       <img alt="Precipitation rate legend" src="${legendUrl()}">
       <div class="rd-legendramp" id="rd-legendramp" hidden></div>
+      <div class="rd-legendhint">Tap to close</div>
     </div>`;
 
   const map = host.querySelector('#rd-map');
@@ -477,25 +478,31 @@ export function createRadar(host, { lat, lon, tz }) {
     const ramp = box.querySelector('#rd-legendramp');
     host.querySelector('.rd-legendhead').innerHTML = `${l.legendTitle}<span>${l.unit}</span>`;
 
-    if (l.legend && !l.cwfisTint) {
-      img.hidden = false;
-      ramp.hidden = true;
-      img.src = legendUrl(l.legend, l.style);
-      return;
-    }
-
-    img.hidden = true;
-    ramp.hidden = false;
-    if (l.cwfisTint) {
-      ramp.innerHTML = `
-        <div class="rd-ramp rd-ramp-smoke"></div>
-        <div class="rd-ramp-keys"><span>2.5e-7+</span><span>1.0e-9</span></div>`;
-    } else {
+    /* Wind shading has its own scale and can be on over either data layer, so
+       the legend has to be able to show both at once rather than one or the
+       other. */
+    const showWind = state.windMode === 'full';
+    ramp.hidden = !showWind;
+    if (showWind) {
       ramp.innerHTML = `
         <div class="rd-ramp rd-ramp-wind"></div>
-        <div class="rd-ramp-keys"><span>90+</span><span>45</span><span>0</span></div>`;
+        <div class="rd-ramp-keys"><span>90+</span><span>45</span><span>0</span></div>
+        <div class="rd-ramp-cap">Wind km/h</div>`;
+    }
+
+    if (l.legend) {
+      img.hidden = false;
+      img.src = legendUrl(l.legend, l.style);
+      return;
+    } else {
+      img.hidden = true;
     }
   }
+
+  const closeLegend = () => {
+    host.querySelector('#rd-legendbox').hidden = true;
+    host.querySelector('.rd-legendbtn')?.classList.remove('on');
+  };
 
   const setEmptyNotice = (anyEcho) => {
     host.querySelector('#rd-empty').hidden = anyEcho || emptyDismissed;
@@ -566,33 +573,6 @@ export function createRadar(host, { lat, lon, tz }) {
     frameLayer.classList.add('reloading');
 
     const bbox = currentBbox();
-
-    /* Wind is not imagery at all — a vector grid drives a particle canvas. */
-    if (layer.particles) {
-      updateLoading(0, 1, 'Loading wind');
-      frameLayer.innerHTML = '';
-      windLayer ??= createWindLayer(windCanvas);
-      windLayer.resize(W, H);
-      frameLayer.appendChild(windSpeedCanvas);   // shading first, particles over
-      frameLayer.appendChild(windCanvas);
-      try {
-        const grid = await fetchWindGrid(currentBounds());
-        if (loadedFor !== myKey) return;
-        windLayer.setField(grid);
-        windLayer.renderSpeedField(windSpeedCanvas);
-        windLayer.start();
-        stamp.innerHTML = `Wind <span class="rd-age">now · gusting to ${
-          Math.round(grid.peak)} km/h in view</span>`;
-      } catch (e) {
-        console.warn('wind grid failed', e);
-        stamp.innerHTML = 'Wind <span class="rd-age">unavailable</span>';
-      }
-      setEmptyNotice(true);
-      ready = true;
-      frameLayer.classList.remove('reloading');
-      updateLoading(1, 1);
-      return;
-    }
 
     const total = frames.length;
 
@@ -783,7 +763,8 @@ export function createRadar(host, { lat, lon, tz }) {
     host.querySelector('.rd-legendbtn').textContent = l.unit;
     host.querySelector('.rd-title b').textContent = l.label;
     paintLegend(l);
-    frameLayer.classList.toggle('rd-smoke', !!l.cwfisTint);
+    // an open legend describing the layer you just left is worse than none
+    closeLegend();
 
     slider.disabled = !l.animated;
     playBtn.hidden = !l.animated;
@@ -820,6 +801,65 @@ export function createRadar(host, { lat, lon, tz }) {
       console.warn('layer times failed', e);
       stamp.textContent = `${l.label} unavailable`;
     }
+  }
+
+  /* ── wind overlay ──
+     Independent of the data layer: it has its own canvases, its own fetch and
+     its own idea of when it is stale, so switching between rain and smoke does
+     not disturb it and reloading rain frames does not restart it. */
+  const windCanvas = host.querySelector('#rd-wind');
+  const windSpeedCanvas = host.querySelector('#rd-wind-speed');
+
+  function paintWindButton() {
+    const btn = host.querySelector('#rd-windbtn');
+    if (!btn) return;
+    btn.classList.toggle('on', state.windMode !== 'off');
+    btn.classList.toggle('full', state.windMode === 'full');
+    btn.setAttribute('aria-label', windLabel(state.windMode));
+    btn.title = windLabel(state.windMode);
+  }
+
+  function cycleWind() {
+    const next = WIND_MODES[(WIND_MODES.indexOf(state.windMode) + 1) % WIND_MODES.length];
+    set('windMode', next);
+    paintWindButton();
+    host.dispatchEvent(new CustomEvent('radar-toast', {
+      bubbles: true, detail: windLabel(next),
+    }));
+    applyWind();
+  }
+
+  async function applyWind() {
+    const mode = state.windMode;
+    const showSpeed = mode === 'full';
+
+    if (mode === 'off') {
+      windLayer?.stop();
+      windLayer?.clear();
+      windCanvas.hidden = true;
+      windSpeedCanvas.hidden = true;
+      return;
+    }
+
+    windCanvas.hidden = false;
+    windSpeedCanvas.hidden = !showSpeed;
+    windLayer ??= createWindLayer(windCanvas);
+    windLayer.resize(W, H);
+
+    // only refetch when the view actually moved
+    const key = frameKey();
+    if (key !== windKey && !windLoading) {
+      windLoading = true;
+      try {
+        const grid = await fetchWindGrid(currentBounds());
+        windLayer.setField(grid);
+        windKey = key;
+      } catch (e) {
+        console.warn('wind grid failed', e);
+      } finally { windLoading = false; }
+    }
+    if (showSpeed) windLayer.renderSpeedField(windSpeedCanvas);
+    windLayer.start();
   }
 
   function setBasemap(key) {
@@ -884,7 +924,7 @@ export function createRadar(host, { lat, lon, tz }) {
 
   const deferFrames = () => {
     clearTimeout(settle);
-    settle = setTimeout(() => { drawFrames(); showFrame(idx); }, 220);
+    settle = setTimeout(() => { drawFrames(); showFrame(idx); applyWind(); }, 220);
   };
 
   const setPan = (dx, dy) => {
@@ -1011,6 +1051,8 @@ export function createRadar(host, { lat, lon, tz }) {
       emptyDismissed = true;
       host.querySelector('#rd-empty').hidden = true;
     }
+    if (act === 'wind') { cycleWind(); paintLegend(currentLayer()); return; }
+    if (act === 'close-legend') { closeLegend(); return; }
     if (act === 'legend') {
       const box = host.querySelector('#rd-legendbox');
       box.hidden = !box.hidden;
@@ -1055,10 +1097,11 @@ export function createRadar(host, { lat, lon, tz }) {
     host.querySelector('.rd-title b').textContent = l.label;
     host.querySelector('.rd-legendbtn').textContent = l.unit;
     paintLegend(l);
-    frameLayer.classList.toggle('rd-smoke', !!l.cwfisTint);
     playBtn.hidden = !l.animated;
     slider.hidden = !l.animated;
+    paintWindButton();
     await loadLayerTimes();
+    applyWind();
   })();
 
   return {

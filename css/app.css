@@ -141,6 +141,42 @@ svg { width: 100%; height: 100%; fill: currentColor; display: block; }
 }
 .icon-btn:active { transform: scale(.9); background: rgba(255, 255, 255, .26); }
 
+/* Active alerts, between the two hero buttons. Deliberately at the very top
+   even though an incoming notification banner can cover it: a warning that is
+   briefly hidden is better than one parked below the fold, and it reappears
+   the moment the notification clears. */
+.alert-banner {
+  flex: 1; min-width: 0; margin: 0 10px;
+  display: flex; align-items: center; gap: 8px;
+  height: 42px; padding: 0 14px;
+  border: 0; border-radius: 999px;
+  background: rgba(196, 62, 48, .92);
+  color: #fff; font: inherit; font-size: 13px; font-weight: 700;
+  cursor: pointer; text-align: left;
+  box-shadow: 0 2px 14px rgba(0, 0, 0, .35);
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  animation: alertPulse 2.6s ease-in-out infinite;
+}
+.alert-banner[hidden] { display: none; }
+.alert-banner .ab-text {
+  flex: 1; min-width: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ab-dot {
+  flex: none; width: 8px; height: 8px; border-radius: 50%;
+  background: #fff;
+}
+.ab-chev {
+  flex: none; width: 18px; height: 18px;
+  transition: transform 220ms var(--ease);
+}
+.alert-banner[aria-expanded="true"] .ab-chev { transform: rotate(180deg); }
+.alert-banner[aria-expanded="true"] { animation: none; }
+@keyframes alertPulse {
+  0%, 100% { box-shadow: 0 2px 14px rgba(0, 0, 0, .35); }
+  50%      { box-shadow: 0 2px 14px rgba(0, 0, 0, .35), 0 0 0 6px rgba(196, 62, 48, .22); }
+}
+
 .hero-main {
   flex: 1;
   display: flex; flex-direction: column;
@@ -553,22 +589,18 @@ svg { width: 100%; height: 100%; fill: currentColor; display: block; }
   mix-blend-mode: multiply;
 }
 
-/* CWFIS renders smoke as a brown ramp. The ECCC style underneath is a
-   black-to-dark-red ramp over the same concentration range, so sepia rotates
-   the hue into that brown family while luminance keeps carrying the value. */
-.rd-frames.rd-smoke .rd-frame > img {
-  filter: sepia(1) saturate(2.2) brightness(1.15) contrast(1.15);
-}
-
 /* legend ramps drawn locally, for the overlays whose colours aren't ECCC's */
 .rd-legendramp { display: flex; gap: 8px; }
 .rd-legendramp[hidden] { display: none; }
 .rd-ramp { width: 26px; border-radius: 4px; min-height: 132px; }
-.rd-ramp-smoke { background: linear-gradient(to bottom, #3b2a1e, #7a5a3c, #b39672, #dccbb4); }
 .rd-ramp-wind {
   background: linear-gradient(to bottom,
     rgb(198,52,46), rgb(220,100,50), rgb(226,160,56),
     rgb(180,190,70), rgb(70,178,130), rgb(58,158,190), rgb(60,110,190));
+}
+.rd-ramp-cap {
+  align-self: center; font-size: 10.5px; font-weight: 700;
+  writing-mode: vertical-rl; opacity: .7;
 }
 .rd-ramp-keys {
   display: flex; flex-direction: column; justify-content: space-between;
@@ -658,6 +690,33 @@ svg { width: 100%; height: 100%; fill: currentColor; display: block; }
 .rd-layer svg { width: 100%; height: 100%; fill: currentColor; display: block; }
 .rd-layer.on { background: #fff; color: #0b1420; }
 
+/* Wind is a three-way toggle rather than one of the exclusive layers, so it
+   needs to show which of its states it is in, not just on or off. */
+.rd-windbtn { position: relative; }
+.rd-winddot {
+  position: absolute; right: 5px; bottom: 5px;
+  width: 8px; height: 8px; border-radius: 50%;
+  background: transparent; transition: background 160ms var(--ease);
+}
+.rd-windbtn.on .rd-winddot { background: #2f9bd6; }
+.rd-windbtn.full .rd-winddot {
+  background: linear-gradient(135deg, #3c6ebe 0%, #46b282 45%, #c6342e 100%);
+}
+
+.rd-wind[hidden], .rd-wind-speed[hidden] { display: none; }
+
+/* air quality faces + second reading */
+.aq-face { flex: none; width: 34px; height: 34px; display: block; }
+.aq-face-lg { width: 44px; height: 44px; }
+.aq-second {
+  display: flex; align-items: center; gap: 12px;
+  margin-top: 14px; padding: 12px 14px;
+  background: var(--surface-2); border-radius: var(--r-md);
+}
+.aq-second b { font-size: 20px; font-weight: 700; }
+.aq-second b span { font-size: 11.5px; font-weight: 600; color: var(--on-surface-var); }
+.aq-second .s { font-size: 12.5px; color: var(--on-surface-var); }
+
 .rd-bottom {
   position: absolute; z-index: 2; left: 0; right: 0; bottom: 0;
   padding: 30px 16px calc(14px + var(--safe-b));
@@ -718,6 +777,11 @@ svg { width: 100%; height: 100%; fill: currentColor; display: block; }
   backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
 }
 .rd-legendbox[hidden] { display: none; }
+.rd-legendbox { cursor: pointer; }
+.rd-legendhint {
+  margin-top: 8px; text-align: center;
+  font-size: 10.5px; font-weight: 600; opacity: .55;
+}
 .rd-legendhead {
   display: flex; justify-content: space-between; align-items: baseline; gap: 14px;
   font-size: 12px; font-weight: 700; text-transform: uppercase;

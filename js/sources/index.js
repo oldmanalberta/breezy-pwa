@@ -73,6 +73,12 @@ export async function loadWeather(loc, pref = 'auto') {
           data.current.feelsLike ??= om.current.feelsLike;
           if (data.hourly.length < 12) data.hourly = om.hourly;
           if (!data.air) data.air = om.air;
+          /* Keep the US AQI even when ECCC supplied AQHI. They measure
+             different things — AQHI is a health-risk score built from three
+             pollutants, US AQI is the worst single pollutant on a 0-500 scale —
+             so showing both side by side is more informative than picking one,
+             and US AQI is the number most other apps report. */
+          if (om.air?.index != null) data.airUs = om.air;
           mergeDailyExtras(data.daily, om.daily);
           data.supplement = 'Open-Meteo';
         } catch { /* ECCC alone is fine */ }

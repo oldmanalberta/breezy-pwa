@@ -36,6 +36,34 @@ function closePanels() {
   document.body.style.overflow = '';
 }
 
+/* ── active alerts banner ─────────────────────────── */
+function paintAlertBanner(data) {
+  const bar = $('#alert-banner');
+  const alerts = data?.alerts ?? [];
+  bar.hidden = !alerts.length;
+  bar.setAttribute('aria-expanded', 'false');
+  if (!alerts.length) return;
+  $('#alert-banner-text').textContent = alerts.length === 1
+    ? alerts[0].title
+    : `${alerts.length} active alerts`;
+}
+
+/* Tapping the banner jumps to the alerts card and opens the first one, rather
+   than duplicating the bulletin text up in the hero where there is no room
+   for it. */
+function toggleAlerts() {
+  const bar = $('#alert-banner');
+  const card = $('#cards .card');
+  const first = $('#cards .alert');
+  if (!first) return;
+
+  const opening = bar.getAttribute('aria-expanded') !== 'true';
+  bar.setAttribute('aria-expanded', String(opening));
+  $$('#cards .alert').forEach((a) => a.classList.toggle('open', opening));
+  if (opening) card?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  else window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
 /* ── location paging ──────────────────────────────── */
 function renderDots() {
   const dots = $('#place-dots');
@@ -128,6 +156,7 @@ function paint(data, place, stale = false) {
   $('#place-sub').textContent = bits.join(' · ');
 
   renderDots();
+  paintAlertBanner(data);
   $('#hero-icon').innerHTML = icon(c.condition, c.night);
   $('#hero-temp').innerHTML = `${temp(c.temp, false)}<span class="deg">°</span>`;
   $('#hero-cond').textContent = c.text || '—';
@@ -369,6 +398,7 @@ function wire() {
     if (e.target.closest('[data-open-radar]')) openRadar();
   });
 
+  $('#alert-banner').addEventListener('click', toggleAlerts);
   $('#radar').addEventListener('radar-toast', (e) => toast(e.detail));
 
   // route the close button through history so it matches the back gesture
@@ -481,6 +511,13 @@ function wire() {
 
 /* ── boot ─────────────────────────────────────────── */
 async function boot() {
+  /* The daily panel's series persists while the app is open, since flipping
+     between wind and UV should be cheap. But it resets on launch: opening the
+     app to whichever chart you last poked at means the temperatures — the
+     reason you opened a weather app — are a tap away rather than in front of
+     you. Same reasoning as the radar opening on precipitation. */
+  if (state.dailyMode !== 'conditions') set('dailyMode', 'conditions');
+
   wire();
   renderSaved();
 
