@@ -21,6 +21,10 @@ const A = 20037508.342789244;          // half the Mercator world, in metres
 const TILE = 256;
 const MIN_Z = 3, MAX_Z = 11;
 
+/* Nine scans is ~54 minutes of history. Twelve pushed the open-to-ready time to
+   roughly nine seconds, since every extra frame costs two WMS renders. */
+const FRAMES = 9;
+
 /* The composite covers North America; hide the feature elsewhere. */
 export const radarAvailable = (lat, lon) =>
   lat >= 22 && lat <= 84 && lon >= -172 && lon <= -48;
@@ -166,9 +170,11 @@ export function createRadar(host, { lat, lon, tz }) {
   let frames = [], idx = 0, playing = false, timer = null, loadedFor = null, ready = false;
   let raf = null;
 
-  /* Motion interpolation needs WebGL2; without it we fall back to the
-     cross-fade path, which still works everywhere. */
-  let useFlow = state.radarFlow !== 'off' && hasWebGL2();
+  /* Images are the default renderer because they are the ones that reliably
+     work: the same mechanism drives the card, which renders correctly on
+     hardware where the WebGL path draws a blank canvas with no error to catch.
+     Motion interpolation is opt-in until that is understood. */
+  let useFlow = state.radarRender === 'flow' && hasWebGL2();
   const glCanvas = document.createElement('canvas');
   glCanvas.className = 'rd-gl';
   let flowR = null;
@@ -176,7 +182,7 @@ export function createRadar(host, { lat, lon, tz }) {
     try {
       flowR = createFlowRenderer(glCanvas);
       useFlow = !!flowR;
-      flowR?.setStrength(state.radarFlow === 'subtle' ? 0.5 : 1);
+      flowR?.setStrength(1);
     } catch (e) { console.warn('WebGL2 radar unavailable', e); useFlow = false; }
   }
 
@@ -480,12 +486,21 @@ export function createRadar(host, { lat, lon, tz }) {
     }
 
     slider.value = String(idx);
+    paintStamp();
+  }
+
+  /* The scan time is the whole point of a radar loop — which moment am I
+     looking at, and how current is it. Shows the age too, because "7:42" tells
+     you nothing unless you also know what time it is now. */
+  function paintStamp() {
     const t = frames[idx];
-    if (t) {
-      const time = new Intl.DateTimeFormat('en-CA',
-        { hour: 'numeric', minute: '2-digit', timeZone: tz || undefined }).format(t);
-      stamp.textContent = idx === frames.length - 1 ? `${time} · latest` : time;
-    }
+    if (!t) return;
+    const time = new Intl.DateTimeFormat('en-CA',
+      { hour: 'numeric', minute: '2-digit', timeZone: tz || undefined }).format(t);
+    const mins = Math.max(0, Math.round((Date.now() - t.getTime()) / 60000));
+    const age = mins < 1 ? 'just now' : mins === 1 ? '1 min ago' : `${mins} min ago`;
+    const newest = idx === frames.length - 1;
+    stamp.innerHTML = `${time} <span class="rd-age">${newest ? `latest · ${age}` : age}</span>`;
   }
 
   function setBasemap(key) {
@@ -689,15 +704,34 @@ export function createRadar(host, { lat, lon, tz }) {
   const ro = new ResizeObserver(resize);
   ro.observe(map);
 
+  /* Keep the panel live: tick the "x min ago" every half minute, and every two
+     minutes ask GeoMet whether a newer scan has published. ECCC issues one
+     every six minutes, so leaving the radar open should follow the weather
+     rather than freeze at whatever was current when it opened. */
+  const ageTimer = setInterval(paintStamp, 30000);
+  const pollTimer = setInterval(async () => {
+    if (document.hidden || !ready) return;
+    try {
+      const latest = await fetchFrameTimes(FRAMES);
+      const newest = latest[latest.length - 1];
+      const had = frames[frames.length - 1];
+      if (!newest || (had && newest.getTime() <= had.getTime())) return;
+
+      const wasAtNewest = idx === frames.length - 1;
+      frames = latest;
+      slider.max = String(frames.length - 1);
+      if (wasAtNewest) idx = frames.length - 1;   // follow the leading edge
+      loadedFor = null;
+      await drawFrames();
+    } catch { /* transient; the next tick tries again */ }
+  }, 120000);
+
   /* ── start ── */
   (async () => {
     resize();
     updateAttrib();
     try {
-      /* Nine scans is ~54 minutes of history. Twelve pushed the open-to-ready
-         time to roughly nine seconds, since every extra frame costs two WMS
-         renders and another motion-estimation pass. */
-      frames = await fetchFrameTimes(9);
+      frames = await fetchFrameTimes(FRAMES);
       idx = frames.length - 1;
       slider.max = String(frames.length - 1);
       loadedFor = null;
@@ -712,6 +746,8 @@ export function createRadar(host, { lat, lon, tz }) {
   return {
     destroy() {
       stop();
+      clearInterval(ageTimer);
+      clearInterval(pollTimer);
       ro.disconnect();
       try { flowR?.destroy(); } catch { /* context may already be gone */ }
       host.innerHTML = '';

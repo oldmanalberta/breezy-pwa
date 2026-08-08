@@ -127,10 +127,10 @@
   </div>
   <div class="setting">
     <label>Radar motion</label>
-    <div class="seg" id="seg-radarflow">
-      <button data-v="on" class="on">Smooth</button><button data-v="subtle">Subtle</button><button data-v="off">Stepped</button>
+    <div class="seg" id="seg-radarrender">
+      <button data-v="images" class="on">Standard</button><button data-v="flow">Smooth motion</button>
     </div>
-    <p class="tiny pad" style="margin-top:8px">Smooth tracks how precipitation moves between scans and fills in the frames between. Subtle applies half as much, which is steadier when the estimate is noisy. Stepped shows the raw scans. Needs WebGL2.</p>
+    <p class="tiny pad" style="margin-top:8px">Standard shows the raw scans and works everywhere. Smooth motion estimates how precipitation is travelling and fills in the frames between, but it needs WebGL2 and renders nothing at all on some devices — if the radar comes up empty, switch back to Standard.</p>
   </div>
   <div class="setting">
     <label>Card order</label>
