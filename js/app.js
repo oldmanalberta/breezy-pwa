@@ -484,8 +484,13 @@ async function boot() {
   setInterval(() => { if (!document.hidden) refresh({ silent: true }); }, 15 * 60e3);
 
   if ('serviceWorker' in navigator) {
-    try { await navigator.serviceWorker.register('./sw.js'); }
-    catch (e) { console.warn('SW registration failed', e); }
+    try {
+      // updateViaCache: 'none' — sw.js is served with max-age=600 like
+      // everything else on Pages, so without this the update check itself can
+      // be answered from cache and a new worker goes unnoticed for ten minutes.
+      const reg = await navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' });
+      reg.update().catch(() => {});
+    } catch (e) { console.warn('SW registration failed', e); }
   }
 }
 

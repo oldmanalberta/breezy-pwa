@@ -354,6 +354,35 @@ export function createRadar(host, { lat, lon, tz }) {
     return c;
   }
 
+  /* Is there any worthwhile echo in this view? One small request answers it,
+     which is all the empty-state notice needs — the image renderer never reads
+     pixels back, so there is nothing else to inspect. Returns true when there
+     IS echo (i.e. the notice should stay hidden). */
+  async function probeEcho(bbox) {
+    const S = 96;
+    try {
+      const urls = [RAIN, SNOW].map((l) => `${GEOMET}?${new URLSearchParams({
+        service: 'WMS', version: '1.3.0', request: 'GetMap', layers: l,
+        crs: 'EPSG:3857', bbox: bbox.join(','), width: S, height: S,
+        format: 'image/png', transparent: 'true',
+      })}`);
+      const c = document.createElement('canvas');
+      c.width = S; c.height = S;
+      const ctx = c.getContext('2d', { willReadFrequently: true });
+      for (const u of urls) {
+        const r = await fetch(u);
+        if (!r.ok) continue;
+        ctx.drawImage(await createImageBitmap(await r.blob()), 0, 0, S, S);
+      }
+      const d = ctx.getImageData(0, 0, S, S).data;
+      let hits = 0;
+      for (let i = 3; i < d.length; i += 4) if (d[i] > 12) hits++;
+      return (hits / (S * S)) * 100 > 0.3;
+    } catch {
+      return true;                 // unknown: don't claim the sky is empty
+    }
+  }
+
   /* Run `fn` over `items` with bounded concurrency. Fetching the twelve frames
      one after another meant twenty-four sequential WMS renders, which at a wide
      bbox is slow enough to look like a hang. */
@@ -384,17 +413,60 @@ export function createRadar(host, { lat, lon, tz }) {
     if (playing) stop();
 
     const total = frames.length;
-    updateLoading(0, total, 'Loading radar');
-
-    /* Flow interpolation holds all twelve frames in GPU memory at once, so the
-       texture budget matters far more than the last bit of sharpness. At 1400
-       on a tall phone that was ~43MB of textures, which is enough for iOS to
-       start reclaiming them; 1100 roughly halves it. */
-    const scale = useFlow
-      ? Math.min(RES_SCALE(), 1100 / Math.max(W, H))
-      : RES_SCALE();
-
     const bbox = currentBbox();
+
+    /* ── image renderer (default) ──
+       Plain <img> per layer per frame, exactly what the radar card does and the
+       one arrangement confirmed to render on every device tested. The previous
+       version decoded each frame into a full-resolution canvas so both
+       renderers could share one code path; nine of those on a tall phone is
+       roughly 47MB of canvas backing store, and iOS silently blanks canvases
+       once its budget is gone — no error, no warning, just an empty map after a
+       loading bar that ran to 100%. Letting the browser own the decoded images
+       sidesteps the whole problem. */
+    if (!useFlow) {
+      updateLoading(0, total, 'Loading radar');
+      const echo = probeEcho(bbox);           // one small request, runs alongside
+
+      const groups = frames.map((t, i) => {
+        const iso = t.toISOString().replace(/\.\d+Z$/, 'Z');
+        const g = document.createElement('div');
+        g.className = 'rd-frame';
+        g.style.opacity = i === idx ? '1' : '0';
+        for (const layer of [RAIN, SNOW]) {
+          const img = new Image();
+          img.alt = '';
+          img.decoding = 'async';
+          img.src = wmsUrl(layer, bbox, W, H, iso, RES_SCALE());
+          g.appendChild(img);
+        }
+        return g;
+      });
+
+      let done = 0;
+      await Promise.all(groups.flatMap((g) => [...g.children].map((img) => new Promise((res) => {
+        const settle = () => { res(); };
+        if (img.complete) return settle();
+        img.addEventListener('load', settle, { once: true });
+        img.addEventListener('error', settle, { once: true });
+      })))).then(() => { done = total; });
+      updateLoading(done || total, total);
+
+      if (loadedFor !== myKey) return;
+      frameLayer.innerHTML = '';
+      for (const g of groups) frameLayer.appendChild(g);
+      host.querySelector('#rd-empty').hidden = await echo;
+      ready = true;
+      updateLoading(total, total);
+      showFrame(idx, 0);
+      return;
+    }
+
+    /* ── motion renderer ──
+       Holds every frame in GPU memory at once, so the texture budget matters
+       more than the last bit of sharpness. */
+    updateLoading(0, total, 'Loading radar');
+    const scale = Math.min(RES_SCALE(), 1100 / Math.max(W, H));
     const composites = await mapLimit(
       frames, 4,
       (t) => loadComposite(bbox, t.toISOString().replace(/\.\d+Z$/, 'Z'), Math.max(1, scale)),

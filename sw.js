@@ -1,7 +1,7 @@
 ﻿/* Service worker: cache the app shell so Breezy opens instantly and works
    offline (the last forecast is kept separately in localStorage). */
 
-const VERSION = 'breezy-v9';
+const VERSION = 'breezy-v10';
 const SHELL = [
   './',
   './index.html',
@@ -60,8 +60,17 @@ self.addEventListener('fetch', (e) => {
   // needs the network for a forecast anyway, and the whole shell is well under
   // 100 KB, so preferring the network costs nothing real and keeps updates
   // instant. Offline still works: every successful response is cached below.
+  /* cache: 'reload' matters more than it looks.
+   *
+   * GitHub Pages serves every file with Cache-Control: max-age=600, and a plain
+   * fetch() inside a service worker still consults the browser's HTTP cache. So
+   * "network-first" was quietly serving up to ten-minute-old JavaScript after a
+   * deploy — which produced the genuinely baffling combination of a fresh
+   * index.html running against a stale app.js, where new markup existed but
+   * nothing was wired to it. Bypass the HTTP cache and let the Cache Storage
+   * copy below be the only fallback. */
   e.respondWith(
-    fetch(request)
+    fetch(new Request(request, { cache: 'reload' }))
       .then((res) => {
         if (res && res.ok) {
           const copy = res.clone();

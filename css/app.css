@@ -697,10 +697,25 @@ svg { width: 100%; height: 100%; fill: currentColor; display: block; }
   padding: 12px 20px; border-radius: 999px;
   font-size: 14px; font-weight: 500;
   box-shadow: 0 6px 26px rgba(0, 0, 0, .45);
-  transition: transform 300ms var(--ease);
   max-width: 88vw; text-align: center;
+
+  /* Hiding by translate alone was not enough: the offset is a percentage of the
+     toast's own height, so an empty one (24px tall) only moved 34px and still
+     poked above the bottom edge as a stray blank pill. Take it out of sight
+     and out of the layer entirely when it isn't saying anything. */
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: transform 300ms var(--ease), opacity 220ms var(--ease),
+              visibility 0s linear 300ms;
 }
-.toast.on { transform: translate(-50%, 0); }
+.toast.on {
+  transform: translate(-50%, 0);
+  opacity: 1;
+  visibility: visible;
+  transition: transform 300ms var(--ease), opacity 220ms var(--ease),
+              visibility 0s linear 0s;
+}
 
 .skel { animation: pulse 1.5s ease-in-out infinite; }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
