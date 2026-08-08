@@ -532,8 +532,17 @@ svg { width: 100%; height: 100%; fill: currentColor; display: block; }
   /* Only a whisper of softening: the imagery is fetched at device pixel ratio
      and the GPU already samples it bilinearly, so heavy blur just smears it. */
   filter: saturate(1.18) contrast(1.05);
-  opacity: .88;
+  /* per-overlay: smoke is a broad wash and needs to sit lighter than radar so
+     roads and place names stay readable underneath it */
+  opacity: var(--rd-op, .88);
   will-change: opacity;
+}
+
+.rd-wind {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  opacity: .85;
+  pointer-events: none;
 }
 
 /* the GL surface draws its own opacity in the shader */

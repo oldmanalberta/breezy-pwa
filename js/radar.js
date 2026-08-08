@@ -12,6 +12,7 @@
 
 import { state, set } from './store.js';
 import { hasWebGL2, createFlowRenderer } from './flow.js';
+import { createWindLayer, fetchWindGrid } from './wind.js';
 
 const GEOMET = 'https://geo.weather.gc.ca/geomet';
 const RAIN = 'RADAR_1KM_RRAI';
@@ -41,18 +42,31 @@ export const LAYERS = {
   smoke: {
     label: 'Smoke',
     wms: ['RAQDPS.SFC_PM2.5'],
+    /* Of ECCC's discrete PM2.5 ramps this is the one that reads like
+       firesmoke.ca: pale cyan at trace levels through blue, yellow, orange and
+       red to near-black at the top, with its detail concentrated in the low
+       range where smoke actually matters. The others are either a single-hue
+       dark red wash or a purple-heavy 0–500 scale that leaves ordinary smoke
+       events almost invisible. firesmoke.ca's own palette could not be used
+       directly — the site publishes no data service and no colour table. */
+    style: 'PM2.5_0to100ugm3_Dis',
     legend: 'RAQDPS.SFC_PM2.5',
     legendTitle: 'Surface PM2.5',
-    unit: 'PM2.5',
-    animated: false,
+    unit: 'µg/m³',
+    animated: true,
+    timeMode: 'future',        // a forecast loop, like firesmoke.ca's
+    frames: 12,
+    opacity: 0.6,
     icon: '<svg viewBox="0 0 24 24"><path d="M4 15h13a3 3 0 1 0-2.6-4.5A4.5 4.5 0 0 0 6 11.2 2 2 0 0 0 4 15zm1.5 3h10a1 1 0 0 1 0 2h-10a1 1 0 0 1 0-2zm3 3h8a1 1 0 0 1 0 2h-8a1 1 0 0 1 0-2z"/></svg>',
   },
   wind: {
     label: 'Wind',
-    wms: ['HRDPS.CONTINENTAL_WSPD'],
-    legend: 'HRDPS.CONTINENTAL_WSPD',
+    /* Drawn as moving particles rather than a WMS image — see js/wind.js.
+       GeoMet only styles this layer as arrows and barbs, which is a static
+       picture of a moving thing. */
+    particles: true,
     legendTitle: 'Wind speed',
-    unit: 'm/s',
+    unit: 'km/h',
     animated: false,
     icon: '<svg viewBox="0 0 24 24"><path d="M3 8h11a2.5 2.5 0 1 0-2.5-2.5h-2A4.5 4.5 0 1 1 14 10H3zm0 4h16a2.5 2.5 0 1 1-2.5 2.5h-2A4.5 4.5 0 1 0 19 10H3zm0 5h8a2 2 0 1 1-2 2H7a4 4 0 1 0 4-4H3z"/></svg>',
   },
@@ -93,7 +107,7 @@ const worldToMercY = (y, z) => A - (y / (TILE * 2 ** z)) * 2 * A;
    device pixel ratio (capped) and let the browser scale it back down. */
 export const RES_SCALE = () => Math.min(2, Math.max(1, window.devicePixelRatio || 1));
 
-function wmsUrl(layer, bbox, w, h, time, scale = 1) {
+function wmsUrl(layer, bbox, w, h, time, scale = 1, style = null) {
   const p = new URLSearchParams({
     service: 'WMS', version: '1.3.0', request: 'GetMap',
     layers: layer, crs: 'EPSG:3857',
@@ -103,6 +117,7 @@ function wmsUrl(layer, bbox, w, h, time, scale = 1) {
     format: 'image/png', transparent: 'true',
   });
   if (time) p.set('time', time);
+  if (style) p.set('styles', style);
   return `${GEOMET}?${p}`;
 }
 
@@ -189,8 +204,8 @@ export function staticMapSpec(lat, lon, w, h, z = 6) {
 
 /* ── frame times ──────────────────────────────────── */
 /* GeoMet advertises the run as "start/end/PT6M" on the time dimension. */
-export async function fetchFrameTimes(limit = 12) {
-  const url = `${GEOMET}?service=WMS&version=1.3.0&request=GetCapabilities&LAYERS=${RAIN}`;
+export async function fetchFrameTimes(limit = 12, layerName = RAIN, mode = 'past') {
+  const url = `${GEOMET}?service=WMS&version=1.3.0&request=GetCapabilities&LAYERS=${layerName}`;
   const xml = new DOMParser().parseFromString(await (await fetch(url)).text(), 'text/xml');
   const dim = [...xml.getElementsByTagNameNS('*', 'Dimension')]
     .find((d) => d.getAttribute('name') === 'time');
@@ -198,10 +213,28 @@ export async function fetchFrameTimes(limit = 12) {
 
   const [startS, endS, stepS] = dim.textContent.trim().split('/');
   const start = new Date(startS), end = new Date(endS);
-  const stepMin = Number(/PT(\d+)M/.exec(stepS || 'PT6M')?.[1] ?? 6);
+
+  /* Parse hours as well as minutes. Radar advertises PT6M, but the air-quality
+     model advertises PT1H — and a minutes-only parser silently fell back to six
+     minutes, so the smoke layer was requested twelve times inside one model
+     hour. GeoMet answers those with empty tiles, which reads as a broken layer
+     rather than a malformed query. */
+  const step = stepS || 'PT6M';
+  const hours = Number(/PT(\d+)H/.exec(step)?.[1] ?? 0);
+  const mins = Number(/T?(?:\d+H)?(\d+)M/.exec(step)?.[1] ?? 0);
+  const stepMin = (hours * 60 + mins) || 6;
 
   const times = [];
   for (let t = start.getTime(); t <= end.getTime(); t += stepMin * 60000) times.push(new Date(t));
+
+  /* Radar is a record of what has happened, so it ends at the newest scan.
+     The air-quality model runs days ahead, and the useful loop there is the one
+     firesmoke.ca shows — where the smoke is going, starting from now. */
+  if (mode === 'future') {
+    const from = Date.now() - 3600e3;
+    const ahead = times.filter((t) => t.getTime() >= from);
+    return (ahead.length ? ahead : times).slice(0, limit);
+  }
   return times.slice(-limit);
 }
 
@@ -215,6 +248,9 @@ export function createRadar(host, { lat, lon, tz }) {
   /* Once you've been told the sky is clear, being told again on every pan is
      just something in the way while you hunt for weather elsewhere. */
   let emptyDismissed = false;
+  let windLayer = null;
+  const windCanvas = document.createElement('canvas');
+  windCanvas.className = 'rd-wind';
 
   /* Images are the default renderer because they are the ones that reliably
      work: the same mechanism drives the card, which renders correctly on
@@ -342,6 +378,15 @@ export function createRadar(host, { lat, lon, tz }) {
       el.style.transform = `translate(${tx * TILE - left}px, ${ty * TILE - top}px)`;
     }
   }
+
+  /* The visible extent in degrees, for services that speak lat/lon. */
+  const currentBounds = () => {
+    const left = cx - W / 2, top = cy - H / 2;
+    return {
+      west: worldToLon(left, z), east: worldToLon(left + W, z),
+      north: worldToLat(top, z), south: worldToLat(top + H, z),
+    };
+  };
 
   const currentBbox = () => {
     const left = cx - W / 2, top = cy - H / 2;
@@ -473,33 +518,28 @@ export function createRadar(host, { lat, lon, tz }) {
 
     const bbox = currentBbox();
 
-    /* Smoke and wind are hourly model fields, not a scan loop — one current
-       image, no playback. Kept separate from the animated path because sharing
-       it would mean nine identical requests for the same forecast hour. */
-    if (!layer.animated) {
-      updateLoading(0, 1, `Loading ${layer.label.toLowerCase()}`);
-      const g = document.createElement('div');
-      g.className = 'rd-frame';
-      g.style.opacity = '1';
-      const waits = layer.wms.map((name) => new Promise((res) => {
-        const img = new Image();
-        img.alt = '';
-        img.decoding = 'async';
-        img.addEventListener('load', res, { once: true });
-        img.addEventListener('error', res, { once: true });
-        img.src = wmsUrl(name, bbox, W, H, null, RES_SCALE());
-        g.appendChild(img);
-      }));
-      await Promise.all(waits);
-      if (loadedFor !== myKey) return;
-
+    /* Wind is not imagery at all — a vector grid drives a particle canvas. */
+    if (layer.particles) {
+      updateLoading(0, 1, 'Loading wind');
       frameLayer.innerHTML = '';
-      frameLayer.appendChild(g);
-      setEmptyNotice(true);                 // the empty notice is radar-specific
+      windLayer ??= createWindLayer(windCanvas);
+      windLayer.resize(W, H);
+      frameLayer.appendChild(windCanvas);
+      try {
+        const grid = await fetchWindGrid(currentBounds());
+        if (loadedFor !== myKey) return;
+        windLayer.setField(grid);
+        windLayer.start();
+        stamp.innerHTML = `Wind <span class="rd-age">now · gusting to ${
+          Math.round(grid.peak)} km/h in view</span>`;
+      } catch (e) {
+        console.warn('wind grid failed', e);
+        stamp.innerHTML = 'Wind <span class="rd-age">unavailable</span>';
+      }
+      setEmptyNotice(true);
       ready = true;
       frameLayer.classList.remove('reloading');
       updateLoading(1, 1);
-      stamp.innerHTML = `${layer.label} <span class="rd-age">current model field</span>`;
       return;
     }
 
@@ -515,19 +555,21 @@ export function createRadar(host, { lat, lon, tz }) {
        loading bar that ran to 100%. Letting the browser own the decoded images
        sidesteps the whole problem. */
     if (!useFlow) {
-      updateLoading(0, total, 'Loading radar');
-      const echo = probeEcho(bbox);           // one small request, runs alongside
+      updateLoading(0, total, `Loading ${layer.label.toLowerCase()}`);
+      frameLayer.style.setProperty('--rd-op', String(layer.opacity ?? 0.88));
+      // the empty notice only means anything for radar
+      const echo = layer.timeMode === 'future' ? Promise.resolve(true) : probeEcho(bbox);
 
       const groups = frames.map((t, i) => {
         const iso = t.toISOString().replace(/\.\d+Z$/, 'Z');
         const g = document.createElement('div');
         g.className = 'rd-frame';
         g.style.opacity = i === idx ? '1' : '0';
-        for (const layer of [RAIN, SNOW]) {
+        for (const name of layer.wms) {
           const img = new Image();
           img.alt = '';
           img.decoding = 'async';
-          img.src = wmsUrl(layer, bbox, W, H, iso, RES_SCALE());
+          img.src = wmsUrl(name, bbox, W, H, iso, RES_SCALE(), layer.style);
           g.appendChild(img);
         }
         return g;
@@ -660,9 +702,21 @@ export function createRadar(host, { lat, lon, tz }) {
   function paintStamp() {
     const t = frames[idx];
     if (!t) return;
+    const layer = currentLayer();
     const time = new Intl.DateTimeFormat('en-CA',
       { hour: 'numeric', minute: '2-digit', timeZone: tz || undefined }).format(t);
-    const mins = Math.max(0, Math.round((Date.now() - t.getTime()) / 60000));
+    const deltaMin = Math.round((t.getTime() - Date.now()) / 60000);
+
+    /* A forecast loop and an observation loop need opposite wording: "50 min
+       ago" is simply wrong for a model hour that has not happened yet. */
+    if (layer.timeMode === 'future') {
+      const h = Math.round(deltaMin / 60);
+      const when = h <= 0 ? 'now' : h === 1 ? 'in 1 hour' : `in ${h} hours`;
+      stamp.innerHTML = `${time} <span class="rd-age">forecast · ${when}</span>`;
+      return;
+    }
+
+    const mins = Math.max(0, -deltaMin);
     const age = mins < 1 ? 'just now' : mins === 1 ? '1 min ago' : `${mins} min ago`;
     const newest = idx === frames.length - 1;
     stamp.innerHTML = `${time} <span class="rd-age">${newest ? `latest · ${age}` : age}</span>`;
@@ -681,16 +735,41 @@ export function createRadar(host, { lat, lon, tz }) {
       `${l.legendTitle}<span>${l.unit}</span>`;
     host.querySelector('.rd-title b').textContent = l.label;
 
-    // only the radar composite has scans to step through
     slider.disabled = !l.animated;
     playBtn.hidden = !l.animated;
     slider.hidden = !l.animated;
     stop();
+    if (!l.particles) { windLayer?.stop(); windLayer?.clear(); }
 
     emptyDismissed = false;
     setEmptyNotice(true);
-    loadedFor = null;
-    drawFrames();
+    // loadLayerTimes owns the reload: it rebuilds the frame list for this
+    // layer's own time axis and only then redraws. Calling drawFrames here as
+    // well raced it, rendering the new layer against the old layer's times.
+    loadLayerTimes();
+  }
+
+  /* Each overlay carries its own time axis — radar looks back over the last
+     hour of scans, smoke looks forward over the model run — so the frame list
+     has to be rebuilt whenever the layer changes, not just at startup. Getting
+     this wrong is subtle: the smoke layer requested at radar timestamps returns
+     mostly nothing, which looks like a broken layer rather than a wrong query. */
+  async function loadLayerTimes() {
+    const l = currentLayer();
+    frames = [];
+    if (!l.animated) { loadedFor = null; drawFrames(); return; }
+    try {
+      const t = await fetchFrameTimes(l.frames ?? FRAMES, l.wms[0], l.timeMode ?? 'past');
+      frames = t;
+      idx = l.timeMode === 'future' ? 0 : Math.max(0, t.length - 1);
+      slider.max = String(Math.max(0, t.length - 1));
+      slider.value = String(idx);
+      loadedFor = null;
+      await drawFrames();
+    } catch (e) {
+      console.warn('layer times failed', e);
+      stamp.textContent = `${l.label} unavailable`;
+    }
   }
 
   function setBasemap(key) {
@@ -921,17 +1000,17 @@ export function createRadar(host, { lat, lon, tz }) {
   (async () => {
     resize();
     updateAttrib();
-    try {
-      frames = await fetchFrameTimes(FRAMES);
-      idx = frames.length - 1;
-      slider.max = String(frames.length - 1);
-      loadedFor = null;
-      drawFrames();
-      showFrame(idx);
-    } catch (err) {
-      stamp.textContent = 'Radar unavailable';
-      console.warn('radar frames failed', err);
+    // reflect whichever overlay was last selected, not always the radar
+    const l = currentLayer();
+    host.querySelector('.rd-title b').textContent = l.label;
+    host.querySelector('.rd-legendbtn').textContent = l.unit;
+    if (l.legend) {
+      host.querySelector('#rd-legendbox img').src = legendUrl(l.legend);
+      host.querySelector('.rd-legendhead').innerHTML = `${l.legendTitle}<span>${l.unit}</span>`;
     }
+    playBtn.hidden = !l.animated;
+    slider.hidden = !l.animated;
+    await loadLayerTimes();
   })();
 
   return {
