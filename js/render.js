@@ -56,15 +56,17 @@ const G = {
 };
 
 /* ── alerts ───────────────────────────────────────── */
-export function alertsCard(data) {
+/* Alerts no longer occupy a card in the list — they live in the drop-down the
+   banner opens, so this returns just the entries. */
+export function alertsMarkup(data) {
   if (!data.alerts?.length) return '';
-  const body = data.alerts.map((a, i) => `
-    <button class="alert" style="--al:${a.colour}" data-alert="${i}">
+  return data.alerts.map((a, i) => `
+    <button class="alert open" style="--al:${a.colour}" data-alert="${i}">
       <b>${esc(a.title.replace(/^\w/, (c) => c.toUpperCase()))}</b>
       <span>${esc(a.area)}${a.expires ? ` · until ${timeLabel(a.expires, data.tz)}` : ''}</span>
       <p>${esc(a.text)}</p>
-    </button>`).join('');
-  return card(`${data.alerts.length} active alert${data.alerts.length > 1 ? 's' : ''}`, G.warn, body);
+    </button>`).join('')
+    + '<button class="alert-drop-close" data-close-alerts>Close</button>';
 }
 
 /* ── hourly, with the temperature curve Breezy draws ── */
@@ -528,5 +530,5 @@ export function renderCards(data, opts = {}) {
     try { return fn(data, opts) ?? ''; }
     catch (e) { console.warn('card failed', e); return ''; }
   };
-  return safe(alertsCard) + order.map((k) => safe(CARDS[k].fn)).join('');
+  return order.map((k) => safe(CARDS[k].fn)).join('');
 }

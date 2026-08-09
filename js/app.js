@@ -6,7 +6,7 @@ import { geocode, flagOf } from './sources/openmeteo.js';
 import { icon, sky, fxKind } from './icons.js';
 import { startFx, stopFx } from './fx.js';
 import { createRadar } from './radar.js';
-import { renderCards, temp, timeLabel, CARDS, DEFAULT_ORDER, normalizeOrder } from './render.js';
+import { renderCards, alertsMarkup, temp, timeLabel, CARDS, DEFAULT_ORDER, normalizeOrder } from './render.js';
 
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => Array.from(document.querySelectorAll(s));
@@ -39,29 +39,33 @@ function closePanels() {
 /* ── active alerts banner ─────────────────────────── */
 function paintAlertBanner(data) {
   const bar = $('#alert-banner');
+  const drop = $('#alert-drop');
   const alerts = data?.alerts ?? [];
+
   bar.hidden = !alerts.length;
   bar.setAttribute('aria-expanded', 'false');
+  drop.hidden = true;
+  drop.innerHTML = alerts.length ? alertsMarkup(data) : '';
   if (!alerts.length) return;
+
+  const title = alerts[0].title.replace(/^\w/, (c) => c.toUpperCase());
   $('#alert-banner-text').textContent = alerts.length === 1
-    ? alerts[0].title
+    ? title
     : `${alerts.length} active alerts`;
 }
 
-/* Tapping the banner jumps to the alerts card and opens the first one, rather
-   than duplicating the bulletin text up in the hero where there is no room
-   for it. */
+function closeAlerts() {
+  $('#alert-drop').hidden = true;
+  $('#alert-banner').setAttribute('aria-expanded', 'false');
+}
+
 function toggleAlerts() {
   const bar = $('#alert-banner');
-  const card = $('#cards .card');
-  const first = $('#cards .alert');
-  if (!first) return;
-
-  const opening = bar.getAttribute('aria-expanded') !== 'true';
+  const drop = $('#alert-drop');
+  if (!drop.innerHTML) return;
+  const opening = drop.hidden;
+  drop.hidden = !opening;
   bar.setAttribute('aria-expanded', String(opening));
-  $$('#cards .alert').forEach((a) => a.classList.toggle('open', opening));
-  if (opening) card?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  else window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
 /* ── location paging ──────────────────────────────── */
@@ -399,6 +403,17 @@ function wire() {
   });
 
   $('#alert-banner').addEventListener('click', toggleAlerts);
+  $('#alert-drop').addEventListener('click', (e) => {
+    if (e.target.closest('[data-close-alerts]')) { closeAlerts(); return; }
+    const a = e.target.closest('.alert');
+    if (a) a.classList.toggle('open');
+  });
+  // tapping the sky behind it dismisses, like any other drop-down
+  $('#hero').addEventListener('click', (e) => {
+    if (!$('#alert-drop').hidden
+        && !e.target.closest('#alert-drop')
+        && !e.target.closest('#alert-banner')) closeAlerts();
+  });
   $('#radar').addEventListener('radar-toast', (e) => toast(e.detail));
 
   // route the close button through history so it matches the back gesture

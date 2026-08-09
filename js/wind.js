@@ -50,20 +50,6 @@ function rampRGB(kmh) {
   return SPEED_RAMP[SPEED_RAMP.length - 1][1];
 }
 
-/* windy-ish ramp: calm teal through green and yellow to red for gales */
-const RAMP = [
-  [0, '#3fb3c8'], [12, '#4fc48b'], [24, '#c9d24a'],
-  [40, '#f0a93b'], [60, '#e4643a'], [90, '#d4372f'],
-];
-
-function rampColour(kmh) {
-  let a = RAMP[0], b = RAMP[RAMP.length - 1];
-  for (let i = 0; i < RAMP.length - 1; i++) {
-    if (kmh >= RAMP[i][0] && kmh <= RAMP[i + 1][0]) { a = RAMP[i]; b = RAMP[i + 1]; break; }
-  }
-  return kmh >= b[0] ? b[1] : a[1];
-}
-
 /* Fetch speed/direction on a lat-lon grid covering the given bounds. */
 export async function fetchWindGrid({ north, south, east, west }, signal) {
   const lats = [], lons = [];
@@ -151,8 +137,12 @@ export function createWindLayer(canvas) {
         continue;
       }
 
-      ctx.strokeStyle = rampColour(spd);
-      ctx.globalAlpha = 0.75;
+      /* White, not speed-tinted. Colouring the streaks as well as the shading
+         underneath meant two encodings of the same quantity fighting each
+         other; plain white reads as motion over any base map and leaves speed
+         to be told by the shading and by how far a particle travels. */
+      ctx.strokeStyle = '#ffffff';
+      ctx.globalAlpha = 0.55 + Math.min(0.35, spd / 90);
       ctx.beginPath();
       ctx.moveTo(p.x, p.y);
       ctx.lineTo(nx, ny);
@@ -229,6 +219,6 @@ export function createWindLayer(canvas) {
 
     clear() { ctx.clearRect(0, 0, W, H); },
 
-    legendStops: RAMP.map(([kmh, hex]) => ({ kmh, hex })),
+    legendStops: SPEED_RAMP.map(([kmh, rgb]) => ({ kmh, rgb })),
   };
 }
