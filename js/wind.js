@@ -137,12 +137,14 @@ export function createWindLayer(canvas) {
         continue;
       }
 
-      /* White, not speed-tinted. Colouring the streaks as well as the shading
-         underneath meant two encodings of the same quantity fighting each
-         other; plain white reads as motion over any base map and leaves speed
-         to be told by the shading and by how far a particle travels. */
-      ctx.strokeStyle = '#ffffff';
-      ctx.globalAlpha = 0.55 + Math.min(0.35, spd / 90);
+      /* One flat colour rather than a speed tint: the shading underneath
+         already encodes speed, and coloured streaks on top of it were two
+         encodings of the same quantity competing. White was the first attempt
+         and disappeared into pale terrain and cloud; this blue-grey holds its
+         edge against light and dark base maps alike. Speed still shows through
+         alpha and through how far a particle travels. */
+      ctx.strokeStyle = '#9FAAB5';
+      ctx.globalAlpha = 0.6 + Math.min(0.4, spd / 80);
       ctx.beginPath();
       ctx.moveTo(p.x, p.y);
       ctx.lineTo(nx, ny);
