@@ -371,6 +371,16 @@ svg { width: 100%; height: 100%; fill: currentColor; display: block; }
 .dp-ico.dim { opacity: .72; }
 .dp-pop { font-size: 11px; font-weight: 700; color: var(--accent-ink); min-height: 15px; }
 .dp-chart { display: block; color: var(--on-surface); }
+
+/* historical: today's column marked, rainfall as a small bar under the curves */
+.hist-mid b, .hist-mid em { color: var(--accent-ink); }
+.hist-mid b { font-weight: 700; }
+.hist-feet { align-items: flex-end; }
+.hist-feet .dp-col { justify-content: flex-end; gap: 2px; }
+.hist-bar {
+  width: 12px; border-radius: 3px 3px 0 0;
+  background: var(--accent-ink); opacity: .8;
+}
 .dp-chart .dp-lo { opacity: .55; }
 
 /* daily */
@@ -605,6 +615,13 @@ svg { width: 100%; height: 100%; fill: currentColor; display: block; }
   /* Only a whisper of softening: the imagery is fetched at device pixel ratio
      and the GPU already samples it bilinearly, so heavy blur just smears it. */
   filter: saturate(1.18) contrast(1.05);
+}
+/* Coarse model fields get blurred back toward the smooth field their banding
+   was drawn from. The saturation lift compensates for the blur pulling colours
+   toward their neighbours, and the extra contrast keeps the plume edge from
+   dissolving into nothing. */
+.rd-frames.soft .rd-frame > img {
+  filter: blur(var(--rd-soft, 0px)) saturate(1.5) contrast(1.15);
   /* per-overlay: smoke is a broad wash and needs to sit lighter than radar so
      roads and place names stay readable underneath it */
   opacity: var(--rd-op, .88);

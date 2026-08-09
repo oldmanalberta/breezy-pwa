@@ -62,6 +62,12 @@ export const LAYERS = {
     animated: true,
     timeMode: 'future',        // a forecast loop, like firesmoke.ca's
     frames: 12,
+    /* Softened, unlike the radar. This is a ~10km model grid drawn with a
+       discrete ramp, so it arrives with both coarse cells and hard colour
+       steps baked into the image — blur is recovering the smooth field the
+       banding was drawn from, not hiding detail. Radar is 1km observed data
+       where the same treatment destroyed real structure. */
+    soft: 7,
     /* Smoke covers whole regions rather than the scattered cells radar draws,
        so at radar's opacity it reads as a sheet laid over the map. Kept light
        enough that roads and place names stay legible through the thick of it. */
@@ -504,6 +510,14 @@ export function createRadar(host, { lat, lon, tz }) {
     host.querySelector('.rd-legendbtn')?.classList.remove('on');
   };
 
+  /* Blur radius is per-layer and scaled by device pixel ratio, since the images
+     are fetched at that ratio — a fixed radius would soften twice as hard on a
+     1x screen as on a retina one. */
+  const applySoftening = (l) => {
+    frameLayer.style.setProperty('--rd-soft', l.soft ? `${(l.soft * RES_SCALE()).toFixed(1)}px` : '0px');
+    frameLayer.classList.toggle('soft', !!l.soft);
+  };
+
   const setEmptyNotice = (anyEcho) => {
     host.querySelector('#rd-empty').hidden = anyEcho || emptyDismissed;
   };
@@ -763,6 +777,7 @@ export function createRadar(host, { lat, lon, tz }) {
     host.querySelector('.rd-legendbtn').textContent = l.unit;
     host.querySelector('.rd-title b').textContent = l.label;
     paintLegend(l);
+    applySoftening(l);
     // an open legend describing the layer you just left is worse than none
     closeLegend();
 
@@ -1097,6 +1112,7 @@ export function createRadar(host, { lat, lon, tz }) {
     host.querySelector('.rd-title b').textContent = l.label;
     host.querySelector('.rd-legendbtn').textContent = l.unit;
     paintLegend(l);
+    applySoftening(l);
     playBtn.hidden = !l.animated;
     slider.hidden = !l.animated;
     paintWindButton();

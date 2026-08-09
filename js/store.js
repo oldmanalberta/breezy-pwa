@@ -19,6 +19,7 @@ const DEFAULTS = {
      off | particles | full (particles plus speed shading underneath) */
   windMode: 'off',
   dailyMode: 'conditions', // which series the daily panel charts
+  historyYears: 1,         // how far back the historical card looks
   order: null,             // card order; null means the default arrangement
   places: [],              // [{id,name,admin,cc,lat,lon,tz,current?:bool}]
   activeId: null,

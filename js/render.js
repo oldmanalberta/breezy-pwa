@@ -3,6 +3,7 @@
 import { icon } from './icons.js';
 import { state } from './store.js';
 import { radarAvailable, staticMapSpec } from './radar.js';
+import { spansAvailable } from './sources/history.js';
 
 /* ── formatting ───────────────────────────────────── */
 export const toF = (c) => (c * 9) / 5 + 32;
@@ -54,6 +55,7 @@ const G = {
   warn:  '<svg viewBox="0 0 24 24"><path d="M1 21h22L12 2zm12-3h-2v-2h2zm0-4h-2v-4h2z"/></svg>',
   radar: '<svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 10 10h-2a8 8 0 1 1-8-8zm0 4a6 6 0 1 0 6 6h-2a4 4 0 1 1-4-4zm0 4a2 2 0 1 0 2 2h-2z"/><path d="M12 12 21 3v4l-9 5z"/></svg>',
   ext:   '<svg viewBox="0 0 24 24"><path d="M14 3v2h3.6l-8.3 8.3 1.4 1.4L19 6.4V10h2V3zM5 5h5V3H3v18h18v-7h-2v5H5z"/></svg>',
+  hist:  '<svg viewBox="0 0 24 24"><path d="M13 3a9 9 0 1 0 8.5 11.9l-1.9-.6A7 7 0 1 1 13 5v3l4.5-4L13 0zm-1 5v5.4l4.3 2.6.8-1.3-3.6-2.2V8z"/></svg>',
 };
 
 /* ── alerts ───────────────────────────────────────── */
@@ -594,6 +596,79 @@ export function sunCard(data) {
     </div>`);
 }
 
+/* ── historical ───────────────────────────────────── */
+/* Same column-and-chart shape as the daily panel, so a fortnight of the past
+   reads the way the week ahead does. Fourteen columns rather than seven, which
+   is why it scrolls: today sits in the middle with a week either side. */
+export function historyCard(data, opts = {}) {
+  const spans = spansAvailable();
+  const pick = spans.includes(opts.historyYears) ? opts.historyYears : spans[0];
+  const h = data.history;
+
+  const pills = spans.map((y) =>
+    `<button class="dp-pill${y === pick ? ' on' : ''}" data-history-years="${y}">${
+      y === 1 ? 'Last year' : `${y} years`}</button>`).join('');
+
+  const shell = (body) => card('Historical', G.hist, `
+    <div class="dp-pills">${pills}</div>${body}`);
+
+  if (!h || h.yearsAgo !== pick) return shell('<p class="dp-summary">Loading…</p>');
+  if (!h.days.length) return shell('<p class="dp-summary">No records for this period.</p>');
+
+  const days = h.days;
+  const W = days.length * COL;
+  const todayKey = new Date().toDateString().slice(0, 3);   // weekday initials
+
+  const temps = days.flatMap((d) => [d.hi, d.lo]).filter((v) => v != null);
+  const max = Math.max(...temps), min = Math.min(...temps);
+  const span = Math.max(max - min, 1);
+  const padT = 24, padB = 24;
+  const y = (v) => padT + (1 - (v - min) / span) * (CHART_H - padT - padB);
+  const x = (i) => i * COL + COL / 2;
+
+  const line = (key, dy, cls) => {
+    const pts = days.map((d, i) => (d[key] == null ? null : `${x(i)},${y(d[key]).toFixed(1)}`))
+                    .filter(Boolean).join(' ');
+    if (!pts) return '';
+    const labels = days.map((d, i) => d[key] == null ? '' :
+      `<text x="${x(i)}" y="${(y(d[key]) + dy).toFixed(1)}" text-anchor="middle"
+         font-size="13" font-weight="600" fill="currentColor">${esc(temp(d[key]))}</text>`).join('');
+    return `<polyline points="${pts}" fill="none" stroke="var(--accent-ink)" stroke-width="2.5"
+              stroke-linecap="round" stroke-linejoin="round" class="${cls}"/>${labels}`;
+  };
+
+  const mid = Math.floor((days.length - 1) / 2);
+  const heads = days.map((d, i) => `
+    <div class="dp-col${i === mid ? ' hist-mid' : ''}">
+      <b>${dayLabel(d.date, data.tz)}</b>
+      <em>${dateLabel(d.date, data.tz)}</em>
+    </div>`).join('');
+
+  const wettest = Math.max(0.001, ...days.map((d) => d.precip ?? 0));
+  const feet = days.map((d) => {
+    const mm = d.precip ?? 0;
+    const barH = mm > 0 ? Math.max(3, (mm / wettest) * 26) : 0;
+    return `<div class="dp-col">
+      <span class="hist-bar" style="height:${barH.toFixed(1)}px"></span>
+      <span class="dp-pop">${mm >= 0.1 ? (mm >= 10 ? Math.round(mm) : mm.toFixed(1)) : ''}</span>
+    </div>`;
+  }).join('');
+
+  return shell(`
+    <p class="dp-summary">${h.year} · ${esc(dateLabel(days[0].date, data.tz))} to ${
+      esc(dateLabel(days[days.length - 1].date, data.tz))} · rainfall in mm</p>
+    <div class="dp-scroll">
+      <div style="width:${W}px">
+        <div class="dp-row">${heads}</div>
+        <svg class="dp-chart" width="${W}" height="${CHART_H}" viewBox="0 0 ${W} ${CHART_H}">
+          ${line('hi', -9, 'dp-hi')}
+          ${line('lo', 17, 'dp-lo')}
+        </svg>
+        <div class="dp-row hist-feet">${feet}</div>
+      </div>
+    </div>`);
+}
+
 /* ── card assembly ────────────────────────────────── */
 
 /* Alerts are deliberately not in here: a severe weather warning always belongs
@@ -605,11 +680,12 @@ export const CARDS = {
   details: { label: 'Details',              fn: detailsCard },
   air:     { label: 'Air quality',          fn: airCard },
   sun:     { label: 'Sun & moon',           fn: sunCard },
+  history: { label: 'Historical',           fn: (d, o) => historyCard(d, o) },
 };
 
 /* Daily leads: with the shortened hero it is the card already on screen when a
    location opens, which is the one worth seeing first. */
-export const DEFAULT_ORDER = ['daily', 'hourly', 'radar', 'details', 'air', 'sun'];
+export const DEFAULT_ORDER = ['daily', 'hourly', 'radar', 'details', 'air', 'sun', 'history'];
 
 export function normalizeOrder(order) {
   const seen = new Set();

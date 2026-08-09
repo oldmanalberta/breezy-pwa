@@ -6,6 +6,7 @@ import { geocode, flagOf } from './sources/openmeteo.js';
 import { icon, sky, fxKind } from './icons.js';
 import { startFx, stopFx } from './fx.js';
 import { createRadar } from './radar.js';
+import { fetchHistory } from './sources/history.js';
 import { renderCards, alertsMarkup, temp, timeLabel, CARDS, DEFAULT_ORDER, normalizeOrder } from './render.js';
 
 const $ = (s) => document.querySelector(s);
@@ -34,6 +35,46 @@ function closePanels() {
   $$('.panel').forEach((p) => p.classList.remove('on'));
   $('#scrim').classList.remove('on');
   document.body.style.overflow = '';
+}
+
+/* ── historical ───────────────────────────────────── */
+/* Fetched after the forecast is already on screen rather than blocking it:
+   nobody opens a weather app for 1976. The card paints a placeholder, this
+   fills it in, and the result is cached per place and span so flipping between
+   spans is instant on the second visit. */
+let histBusy = null;
+const histCache = new Map();
+
+async function loadHistory(place) {
+  if (!place) return;
+  const years = state.historyYears;
+  const key = `${place.id}|${years}`;
+
+  if (histCache.has(key)) {
+    if (current) { current.history = histCache.get(key); repaintCard('history'); }
+    return;
+  }
+  if (histBusy === key) return;
+  histBusy = key;
+  try {
+    const h = await fetchHistory(place.lat, place.lon, years);
+    histCache.set(key, h);
+    if (current && state.historyYears === years && activePlace()?.id === place.id) {
+      current.history = h;
+      repaintCard('history');
+    }
+  } catch (e) {
+    console.warn('history failed', e);
+  } finally { if (histBusy === key) histBusy = null; }
+}
+
+/* Repaint the whole deck but hold the scroll position, so a card filling in
+   underneath you doesn't move the page. */
+function repaintCard() {
+  if (!current) return;
+  const y = window.scrollY;
+  paint(current, activePlace());
+  window.scrollTo(0, y);
 }
 
 /* ── active alerts banner ─────────────────────────── */
@@ -179,8 +220,10 @@ function paint(data, place, stale = false) {
   data.coords = { lat: place.lat, lon: place.lon };
   $('#cards').innerHTML = renderCards(data, {
     dailyMode: state.dailyMode,
+    historyYears: state.historyYears,
     order: state.order ?? DEFAULT_ORDER,
   });
+  loadHistory(place);
 
   const srcBits = [data.source.name];
   if (data.supplement) srcBits.push(`+ ${data.supplement}`);
@@ -388,6 +431,16 @@ function wire() {
   $('#cards').addEventListener('click', (e) => {
     const a = e.target.closest('.alert');
     if (a) { a.classList.toggle('open'); return; }
+
+    const hy = e.target.closest('[data-history-years]');
+    if (hy) {
+      set('historyYears', Number(hy.dataset.historyYears));
+      const p = activePlace();
+      if (current) { current.history = histCache.get(`${p?.id}|${state.historyYears}`) ?? null; }
+      repaintCard();
+      loadHistory(p);
+      return;
+    }
 
     const pill = e.target.closest('[data-daily-mode]');
     if (pill) {

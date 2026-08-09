@@ -1,7 +1,7 @@
 ﻿/* Service worker: cache the app shell so Breezy opens instantly and works
    offline (the last forecast is kept separately in localStorage). */
 
-const VERSION = 'breezy-v19';
+const VERSION = 'breezy-v20';
 const SHELL = [
   './',
   './index.html',
@@ -21,6 +21,7 @@ const SHELL = [
   './js/sources/index.js',
   './js/sources/eccc.js',
   './js/sources/openmeteo.js',
+  './js/sources/history.js',
   './icons/icon-180.png',
   './icons/icon-192.png',
   './icons/icon-512.png',

@@ -7,14 +7,21 @@ let running = false;
 
 const rand = (a, b) => a + Math.random() * (b - a);
 
+/* Returns false when the canvas has no layout yet. On a phone the first paint
+   can land before the sky element has been measured, and seeding a field into a
+   zero-area canvas leaves it permanently empty with nothing to retry it. */
 function resize() {
-  if (!canvas) return;
+  if (!canvas || !ctx) return false;
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  if (!w || !h) return false;
+
   dpr = Math.min(window.devicePixelRatio || 1, 2);
-  W = canvas.clientWidth; H = canvas.clientHeight;
+  W = w; H = h;
   canvas.width = Math.floor(W * dpr);
   canvas.height = Math.floor(H * dpr);
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   seed();
+  return true;
 }
 
 function seed() {
@@ -94,22 +101,45 @@ function frame(ts) {
   raf = requestAnimationFrame(frame);
 }
 
+let wantOn = false, retry = null;
+
 export function startFx(el, newKind, enabled = true) {
-  canvas = el;
-  if (!canvas) return;
+  if (!el) return;
+  // re-acquire the context if the canvas element itself changed
+  if (el !== canvas) { canvas = el; ctx = canvas.getContext('2d'); }
   ctx = ctx || canvas.getContext('2d');
   kind = newKind;
+  wantOn = !!enabled;
 
   stopFx();
-  if (!enabled || window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-    ctx.clearRect(0, 0, W, H);
+  clearTimeout(retry);
+
+  /* The OS "Reduce Motion" preference used to veto this outright, which made
+     the settings toggle look broken: switching it on changed nothing and said
+     nothing. It is a default, not an override — asking for the animation in
+     this app's own settings is a more specific instruction than a system-wide
+     preference, so an explicit On wins. iOS enables Reduce Motion far more
+     often than people realise, including via some battery and accessibility
+     profiles, which is why this only ever failed on the phone. */
+  if (!wantOn) {
+    if (W && H) ctx.clearRect(0, 0, W, H);
     return;
   }
-  resize();
+
+  if (!resize()) {
+    // no layout yet — try again once the browser has measured the element
+    retry = setTimeout(() => startFx(el, newKind, enabled), 120);
+    return;
+  }
+
   running = true;
   last = performance.now();
   raf = requestAnimationFrame(frame);
 }
+
+/* Whether the animation should be running, for callers that need to restart it
+   without knowing the setting themselves. */
+export const fxEnabled = () => wantOn;
 
 export function stopFx() {
   running = false;
@@ -118,7 +148,16 @@ export function stopFx() {
 }
 
 window.addEventListener('resize', () => { if (running) resize(); });
+
+/* Coming back from the background needs a re-measure, not just a restart: iOS
+   hides and reveals the URL bar and rotates behind your back, so the canvas is
+   frequently a different size than when it was suspended. Restarting against
+   stale dimensions drew into a region no longer on screen. */
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden) stopFx();
-  else if (canvas && kind) { running = true; last = performance.now(); raf = requestAnimationFrame(frame); }
+  if (document.hidden) { stopFx(); return; }
+  if (!canvas || !kind || !wantOn) return;
+  if (!resize()) return;
+  running = true;
+  last = performance.now();
+  raf = requestAnimationFrame(frame);
 });
