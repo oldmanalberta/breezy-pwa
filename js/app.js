@@ -50,8 +50,17 @@ async function loadHistory(place) {
   const years = state.historyYears;
   const key = `${place.id}|${years}`;
 
+  /* Only repaint when this is genuinely new. paint() calls loadHistory(), so
+     repainting on every cache hit meant paint -> loadHistory -> repaint ->
+     paint, recursing until the main thread was wedged. The symptom was not an
+     error but a stall: renders caught half-finished, and a deck showing two
+     cards because the loop re-entered before the rest had been appended. */
   if (histCache.has(key)) {
-    if (current) { current.history = histCache.get(key); repaintCard('history'); }
+    const hit = histCache.get(key);
+    if (current && current.history !== hit) {
+      current.history = hit;
+      repaintCard();
+    }
     return;
   }
   if (histBusy === key) return;
@@ -69,12 +78,19 @@ async function loadHistory(place) {
 }
 
 /* Repaint the whole deck but hold the scroll position, so a card filling in
-   underneath you doesn't move the page. */
+   underneath you doesn't move the page.
+   The re-entrancy guard is belt and braces: paint() kicks off loadHistory(),
+   which can call back here, and one wrong condition in that chain wedges the
+   main thread rather than throwing anything you could see. */
+let repainting = false;
 function repaintCard() {
-  if (!current) return;
-  const y = window.scrollY;
-  paint(current, activePlace());
-  window.scrollTo(0, y);
+  if (!current || repainting) return;
+  repainting = true;
+  try {
+    const y = window.scrollY;
+    paint(current, activePlace());
+    window.scrollTo(0, y);
+  } finally { repainting = false; }
 }
 
 /* ── active alerts banner ─────────────────────────── */
