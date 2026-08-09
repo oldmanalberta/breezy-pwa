@@ -53,6 +53,7 @@ const G = {
   sun:   '<svg viewBox="0 0 24 24"><path d="M12 7a5 5 0 1 0 5 5 5 5 0 0 0-5-5zm0-5 2 3h-4zm0 20-2-3h4zM2 12l3-2v4zm20 0-3 2v-4zM4.9 4.9l3.5 1.2-2.3 2.3zm14.2 14.2-3.5-1.2 2.3-2.3zM19.1 4.9l-1.2 3.5-2.3-2.3zM4.9 19.1l1.2-3.5 2.3 2.3z"/></svg>',
   warn:  '<svg viewBox="0 0 24 24"><path d="M1 21h22L12 2zm12-3h-2v-2h2zm0-4h-2v-4h2z"/></svg>',
   radar: '<svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 10 10h-2a8 8 0 1 1-8-8zm0 4a6 6 0 1 0 6 6h-2a4 4 0 1 1-4-4zm0 4a2 2 0 1 0 2 2h-2z"/><path d="M12 12 21 3v4l-9 5z"/></svg>',
+  ext:   '<svg viewBox="0 0 24 24"><path d="M14 3v2h3.6l-8.3 8.3 1.4 1.4L19 6.4V10h2V3zM5 5h5V3H3v18h18v-7h-2v5H5z"/></svg>',
 };
 
 /* ── alerts ───────────────────────────────────────── */
@@ -327,31 +328,38 @@ export function airCard(data) {
      US number is what most other apps report, so having both saves guessing at
      which scale a figure is on. */
   const us = data.airUs && a.scale === 'AQHI' && data.airUs.index != null ? data.airUs : null;
+
+  /* Each reading links to the authority that defines it. AQHI and US AQI are
+     different scales with different bands, and "what does 4 actually mean"
+     is a fair question the app cannot answer in a card. */
   const second = us ? `
-    <div class="aq-second">
+    <a class="aq-second" href="${AQ_DOCS.us}" target="_blank" rel="noopener">
       <span class="aq-face">${aqiFace(us.index)}</span>
       <div>
         <b>${us.index} <span>US AQI</span></b>
         <div class="s">${esc(us.category)}</div>
       </div>
-    </div>` : '';
+      <span class="aq-info">${G.ext}</span>
+    </a>` : '';
 
-  return card(a.scale === 'AQHI' ? 'Air quality health index' : 'Air quality', G.leaf, `
-    <div class="aq-head">
-      <span class="aq-face aq-face-lg">${aqiFace(a.scale === 'AQHI' ? aqhiToAqi(a.index) : a.index)}</span>
+  const isAqhi = a.scale === 'AQHI';
+  return card(isAqhi ? 'Air quality health index' : 'Air quality', G.leaf, `
+    <a class="aq-head" href="${isAqhi ? AQ_DOCS.aqhi : AQ_DOCS.us}" target="_blank" rel="noopener">
       <div class="aq-val">${a.index}</div>
       <div>
         <div class="aq-cat">${esc(a.category)}</div>
-        <div class="s" style="font-size:12px;color:var(--on-surface-var)">${a.scale === 'AQHI' ? 'Canada AQHI · 1–10+' : 'US AQI'}</div>
+        <div class="s" style="font-size:12px;color:var(--on-surface-var)">${isAqhi ? 'Canada AQHI · 1–10+' : 'US AQI'}</div>
       </div>
-    </div>
+      <span class="aq-info">${G.ext}</span>
+    </a>
     <div class="aq-scale"><i style="left:${pct.toFixed(1)}%"></i></div>
     ${second}${sub}${poll}`);
 }
 
-/* Rough AQHI→AQI bridge, used only to pick which face to draw so the two
-   readings don't contradict each other visually. Not shown as a number. */
-const aqhiToAqi = (v) => (v <= 3 ? 40 : v <= 6 ? 90 : v <= 10 ? 140 : 200);
+const AQ_DOCS = {
+  aqhi: 'https://www.canada.ca/en/environment-climate-change/services/air-quality-health-index/about.html',
+  us: 'https://www.airnow.gov/aqi/aqi-basics/',
+};
 
 /* Face icons on the US AQI bands: good, moderate, unhealthy for sensitive
    groups, unhealthy, very unhealthy, hazardous. */
@@ -459,6 +467,52 @@ function moonEvents(frac) {
     : { next: 'New moon', in: fmt(toNew), other: 'Full moon', otherIn: fmt(toFull) };
 }
 
+/* ── where things actually are in the sky ─────────────
+ * Low-precision solar and lunar position, the standard truncated series. A
+ * degree or so of error is invisible on a 300px arc, and it avoids pulling in
+ * an ephemeris library for what is ultimately a decoration with a job: showing
+ * where the sun is now, and whether the moon is up at all.
+ */
+const DEG = Math.PI / 180;
+const days2000 = (d) => d.getTime() / 86400000 - 10957.5;
+
+function equatorial(lonEcl, latEcl, n) {
+  const e = (23.439 - 0.0000004 * n) * DEG;
+  const l = lonEcl * DEG, b = latEcl * DEG;
+  const ra = Math.atan2(Math.sin(l) * Math.cos(e) - Math.tan(b) * Math.sin(e), Math.cos(l));
+  const dec = Math.asin(Math.sin(b) * Math.cos(e) + Math.cos(b) * Math.sin(e) * Math.sin(l));
+  return { ra, dec };
+}
+
+const sunEq = (n) => {
+  const g = (357.528 + 0.9856003 * n) * DEG;
+  const lam = 280.46 + 0.9856474 * n + 1.915 * Math.sin(g) + 0.02 * Math.sin(2 * g);
+  return equatorial(lam, 0, n);
+};
+
+const moonEq = (n) => {
+  const L = 218.316 + 13.176396 * n;
+  const M = (134.963 + 13.064993 * n) * DEG;
+  const F = (93.272 + 13.229350 * n) * DEG;
+  return equatorial(L + 6.289 * Math.sin(M), 5.128 * Math.sin(F), n);
+};
+
+/* Altitude above the horizon, and how far through its own rise-to-set arc the
+   body is — 0 at rising, 0.5 at its highest, 1 at setting. */
+function skyPos(eq, n, lat, lon) {
+  const lst = (280.16 + 360.9856235 * n + lon) * DEG;
+  const H = lst - eq.ra;
+  const la = lat * DEG;
+  const alt = Math.asin(Math.sin(la) * Math.sin(eq.dec) + Math.cos(la) * Math.cos(eq.dec) * Math.cos(H));
+
+  // semi-diurnal arc: how far either side of transit the body stays up
+  const cosH0 = -Math.tan(la) * Math.tan(eq.dec);
+  const H0 = Math.abs(cosH0) > 1 ? (cosH0 > 1 ? 0 : Math.PI) : Math.acos(cosH0);
+  let h = Math.atan2(Math.sin(H), Math.cos(H));          // wrap to ±π
+  const t = H0 ? 0.5 + h / (2 * H0) : 0.5;
+  return { alt, t };
+}
+
 export function sunCard(data) {
   const { sunrise, sunset } = data.sun ?? {};
   if (!sunrise || !sunset || isNaN(sunrise) || isNaN(sunset)) return '';
@@ -474,6 +528,46 @@ export function sunCard(data) {
   const { frac, illum, name } = moonPhase();
   const ev = moonEvents(frac);
 
+  /* Both bodies are placed on the same arc from their real positions, so the
+     moon appears where it actually is rather than as an afterthought — and is
+     simply absent when it is below the horizon. */
+  const { lat, lon } = data.coords ?? {};
+  const onArc = (f) => {
+    const a = Math.PI * (1 - Math.min(1, Math.max(0, f)));
+    return [cx + Math.cos(a) * r, cy - Math.sin(a) * r];
+  };
+
+  let sunUp = true, sunXY = [px, py], moonXY = null;
+  if (lat != null && lon != null) {
+    const n = days2000(new Date(now));
+    const s = skyPos(sunEq(n), n, lat, lon);
+    sunUp = s.alt > -0.05;
+    if (sunUp) sunXY = onArc(s.t);
+    const m = skyPos(moonEq(n), n, lat, lon);
+    if (m.alt > -0.05) moonXY = onArc(m.t);
+  }
+
+  const [sx, sy] = sunXY;
+  /* Below the horizon the sun still marks where it went down, dimmed — an arc
+     with nothing on it reads as a failure to draw rather than as night. */
+  const sunGlyph = sunUp ? `
+    <g transform="translate(${sx.toFixed(1)} ${sy.toFixed(1)})">
+      <circle r="13" fill="var(--accent-ink)" opacity=".22"/>
+      <circle r="7.5" fill="#f7c948"/>
+      <g stroke="#f7c948" stroke-width="1.8" stroke-linecap="round">
+        <path d="M0-12V-15M0 12v3M-12 0h-3M12 0h3M-8.5-8.5-10.6-10.6M8.5 8.5l2.1 2.1M8.5-8.5l2.1-2.1M-8.5 8.5-10.6 10.6"/>
+      </g>
+    </g>` : `
+    <g transform="translate(${sx.toFixed(1)} ${sy.toFixed(1)})" opacity=".45">
+      <circle r="6" fill="var(--on-surface-var)"/>
+    </g>`;
+
+  const moonGlyph = moonXY ? `
+    <g transform="translate(${moonXY[0].toFixed(1)} ${moonXY[1].toFixed(1)})">
+      <circle r="11" fill="#0b1420" opacity=".18"/>
+      <g transform="translate(-8 -8) scale(.516)">${moonSvg(frac, 31)}</g>
+    </g>` : '';
+
   return card('Sun & moon', G.sun, `
     <div class="sun-arc">
       <svg viewBox="0 0 ${W} ${H}" style="height:${H}px">
@@ -481,7 +575,7 @@ export function sunCard(data) {
               fill="none" stroke="var(--outline)" stroke-width="2.5" stroke-dasharray="4 5"/>
         <path d="M${cx - r} ${cy} A${r} ${r} 0 0 1 ${px.toFixed(1)} ${py.toFixed(1)}"
               fill="none" stroke="var(--accent-ink)" stroke-width="3" stroke-linecap="round"/>
-        <circle cx="${px.toFixed(1)}" cy="${py.toFixed(1)}" r="7" fill="var(--accent-ink)"/>
+        ${moonGlyph}${sunGlyph}
       </svg>
       <div class="sun-times">
         <div>Sunrise<b>${timeLabel(sunrise, data.tz)}</b></div>
