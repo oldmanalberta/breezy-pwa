@@ -77,6 +77,18 @@ async function loadHistory(place) {
   } finally { if (histBusy === key) histBusy = null; }
 }
 
+/* Park the historical strip so the matching day sits in the middle, leaving
+   room to scroll into the weeks either side of it. */
+function centreHistoryScroll() {
+  const box = $('[data-hist-scroll]');
+  if (!box) return;
+  const cols = box.querySelectorAll('.dp-row .dp-col');
+  const i = Number(box.dataset.centre || 0);
+  const col = cols[i];
+  if (!col) return;
+  box.scrollLeft = Math.max(0, col.offsetLeft + col.offsetWidth / 2 - box.clientWidth / 2);
+}
+
 /* Repaint the whole deck but hold the scroll position, so a card filling in
    underneath you doesn't move the page.
    The re-entrancy guard is belt and braces: paint() kicks off loadHistory(),
@@ -240,6 +252,7 @@ function paint(data, place, stale = false) {
     order: state.order ?? DEFAULT_ORDER,
   });
   loadHistory(place);
+  centreHistoryScroll();
 
   const srcBits = [data.source.name];
   if (data.supplement) srcBits.push(`+ ${data.supplement}`);

@@ -296,6 +296,11 @@ export function createRadar(host, { lat, lon, tz }) {
       <canvas class="rd-wind-speed" id="rd-wind-speed" hidden></canvas>
       <canvas class="rd-wind" id="rd-wind" hidden></canvas>
       <div class="rd-pin" title="Your location"></div>
+      <div class="rd-empty rd-fail" id="rd-fail" hidden>
+        <b id="rd-fail-title">Layer unavailable</b>
+        <span id="rd-fail-text"></span>
+        <button class="rd-empty-x" data-rd="dismiss-fail">Got it</button>
+      </div>
       <div class="rd-empty" id="rd-empty" hidden>
         <b>Little or no precipitation in view</b>
         <span>The radar is working — there is simply nothing falling here right now. Zoom out to look further afield.</span>
@@ -518,6 +523,19 @@ export function createRadar(host, { lat, lon, tz }) {
     frameLayer.classList.toggle('soft', !!l.soft);
   };
 
+  /* Says which layer failed and leaves precipitation one tap away, because a
+     failed smoke forecast should not strand you on a blank map. */
+  function showLayerError(layer) {
+    const box = host.querySelector('#rd-fail');
+    if (!box) return;
+    host.querySelector('#rd-fail-title').textContent = `${layer.label} unavailable`;
+    host.querySelector('#rd-fail-text').textContent =
+      `Environment Canada did not return the ${layer.label.toLowerCase()} forecast just now.`
+      + ' It is usually brief — try again shortly, or switch back to precipitation.';
+    box.hidden = false;
+  }
+  const hideLayerError = () => { const b = host.querySelector('#rd-fail'); if (b) b.hidden = true; };
+
   const setEmptyNotice = (anyEcho) => {
     host.querySelector('#rd-empty').hidden = anyEcho || emptyDismissed;
   };
@@ -620,16 +638,35 @@ export function createRadar(host, { lat, lon, tz }) {
         return g;
       });
 
-      let done = 0;
-      await Promise.all(groups.flatMap((g) => [...g.children].map((img) => new Promise((res) => {
-        const settle = () => { res(); };
-        if (img.complete) return settle();
-        img.addEventListener('load', settle, { once: true });
-        img.addEventListener('error', settle, { once: true });
-      })))).then(() => { done = total; });
-      updateLoading(done || total, total);
+      /* Every image gets a deadline. Without one a single request that hangs —
+         and GeoMet's model layers do occasionally sit there — left the layer
+         never ready, so the previous layer's imagery stayed on screen with its
+         own timestamp. That reads as the radar refusing to leave rather than
+         as smoke failing to arrive. */
+      const LOAD_MS = 15000;
+      const settled = await Promise.all(groups.flatMap((g) => [...g.children].map((img) =>
+        new Promise((res) => {
+          if (img.complete && img.naturalWidth > 0) return res(true);
+          const done = (ok) => { clearTimeout(timer); res(ok); };
+          const timer = setTimeout(() => { img.src = ''; done(false); }, LOAD_MS);
+          img.addEventListener('load', () => done(true), { once: true });
+          img.addEventListener('error', () => done(false), { once: true });
+        }))));
 
       if (loadedFor !== myKey) return;
+
+      const okCount = settled.filter(Boolean).length;
+      if (!okCount) {
+        // nothing arrived: drop the old layer's imagery rather than implying it
+        frameLayer.innerHTML = '';
+        frameLayer.classList.remove('reloading');
+        ready = false;
+        updateLoading(1, 1);
+        stamp.innerHTML = `${layer.label} <span class="rd-age">unavailable</span>`;
+        showLayerError(layer);
+        return;
+      }
+
       frameLayer.innerHTML = '';
       for (const g of groups) frameLayer.appendChild(g);
       setEmptyNotice(await echo);
@@ -789,6 +826,7 @@ export function createRadar(host, { lat, lon, tz }) {
 
     emptyDismissed = false;
     setEmptyNotice(true);
+    hideLayerError();
     // loadLayerTimes owns the reload: it rebuilds the frame list for this
     // layer's own time axis and only then redraws. Calling drawFrames here as
     // well raced it, rendering the new layer against the old layer's times.
@@ -813,8 +851,16 @@ export function createRadar(host, { lat, lon, tz }) {
       loadedFor = null;
       await drawFrames();
     } catch (e) {
+      /* Same reasoning as a failed image: with no frame list the draw bails out
+         early and whatever the previous layer left behind stays on screen,
+         timestamp and all. Clear it and say so. */
       console.warn('layer times failed', e);
-      stamp.textContent = `${l.label} unavailable`;
+      frameLayer.innerHTML = '';
+      frameLayer.classList.remove('reloading');
+      ready = false;
+      updateLoading(1, 1);
+      stamp.innerHTML = `${l.label} <span class="rd-age">unavailable</span>`;
+      showLayerError(l);
     }
   }
 
@@ -1062,6 +1108,7 @@ export function createRadar(host, { lat, lon, tz }) {
 
     const layerKey = e.target.closest('[data-layer]')?.dataset.layer;
     if (layerKey && LAYERS[layerKey]) { setLayer(layerKey); return; }
+    if (act === 'dismiss-fail') { hideLayerError(); return; }
     if (act === 'dismiss-empty') {
       emptyDismissed = true;
       host.querySelector('#rd-empty').hidden = true;

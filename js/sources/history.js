@@ -23,31 +23,69 @@ export const spansAvailable = (now = new Date()) =>
 
 const iso = (d) => d.toISOString().slice(0, 10);
 
-/* ±7 days around today's date in the target year, so the middle column lines
-   up with today and you can read either side of it. */
-export async function fetchHistory(lat, lon, yearsAgo, now = new Date()) {
-  const target = new Date(now);
-  target.setFullYear(now.getFullYear() - yearsAgo);
+/* Days either side of today's date in the target year. Wider than the fortnight
+   it displays at rest so there is somewhere to scroll to in both directions,
+   with the matching day sitting dead centre. */
+const HALF_WINDOW = 21;
 
-  const from = new Date(target); from.setDate(target.getDate() - 7);
-  const to = new Date(target); to.setDate(target.getDate() + 6);
+const parseDaily = (d) => (d.time ?? []).map((t, i) => ({
+  // parsed as local noon so a timezone shift can't roll the label a day back
+  date: new Date(`${t}T12:00:00`),
+  hi: d.temperature_2m_max?.[i] ?? null,
+  lo: d.temperature_2m_min?.[i] ?? null,
+  precip: d.precipitation_sum?.[i] ?? null,
+})).filter((x) => x.hi != null || x.lo != null);
 
+async function archive(lat, lon, from, to) {
   const url = `${ARCHIVE}?latitude=${lat}&longitude=${lon}`
     + `&start_date=${iso(from)}&end_date=${iso(to)}`
     + `&daily=temperature_2m_max,temperature_2m_min,precipitation_sum`
     + `&timezone=auto`;
-
   const res = await fetch(url);
   if (!res.ok) throw new Error(`archive ${res.status}`);
-  const d = (await res.json()).daily ?? {};
+  return (await res.json()).daily ?? {};
+}
 
-  const days = (d.time ?? []).map((t, i) => ({
-    // parsed as local noon so a timezone shift can't roll the label a day back
-    date: new Date(`${t}T12:00:00`),
-    hi: d.temperature_2m_max?.[i] ?? null,
-    lo: d.temperature_2m_min?.[i] ?? null,
-    precip: d.precipitation_sum?.[i] ?? null,
-  })).filter((x) => x.hi != null || x.lo != null);
+/* Twelve monthly rainfall totals for a calendar year. The current year stops at
+   whatever the archive has — reanalysis lags real time by a few days — so the
+   final month is a partial total and is marked as such by the caller. */
+function monthlyTotals(daily) {
+  const months = Array(12).fill(null);
+  const t = daily.time ?? [], p = daily.precipitation_sum ?? [];
+  for (let i = 0; i < t.length; i++) {
+    if (p[i] == null) continue;
+    const m = Number(t[i].slice(5, 7)) - 1;
+    months[m] = (months[m] ?? 0) + p[i];
+  }
+  return months.map((v) => (v == null ? null : Math.round(v * 10) / 10));
+}
 
-  return { yearsAgo, year: target.getFullYear(), days, today: iso(target) };
+export async function fetchHistory(lat, lon, yearsAgo, now = new Date()) {
+  const target = new Date(now);
+  target.setFullYear(now.getFullYear() - yearsAgo);
+
+  const from = new Date(target); from.setDate(target.getDate() - HALF_WINDOW);
+  const to = new Date(target); to.setDate(target.getDate() + HALF_WINDOW);
+
+  const pastYear = target.getFullYear();
+  const nowYear = now.getFullYear();
+
+  // archive lags a few days; ask only for what can exist
+  const lag = new Date(now); lag.setDate(now.getDate() - 6);
+
+  const [window, pastAll, nowAll] = await Promise.all([
+    archive(lat, lon, from, to),
+    archive(lat, lon, new Date(`${pastYear}-01-01T12:00:00`), new Date(`${pastYear}-12-31T12:00:00`)),
+    archive(lat, lon, new Date(`${nowYear}-01-01T12:00:00`), lag),
+  ]);
+
+  return {
+    yearsAgo,
+    year: pastYear,
+    nowYear,
+    days: parseDaily(window),
+    centre: iso(target),
+    monthlyPast: monthlyTotals(pastAll),
+    monthlyNow: monthlyTotals(nowAll),
+  };
 }

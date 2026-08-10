@@ -637,7 +637,10 @@ export function historyCard(data, opts = {}) {
               stroke-linecap="round" stroke-linejoin="round" class="${cls}"/>${labels}`;
   };
 
-  const mid = Math.floor((days.length - 1) / 2);
+  /* Centre on the day that matches today rather than the middle of whatever
+     the archive returned, so the marked column is the one you came to see even
+     when the window is clipped at one end. */
+  const mid = Math.max(0, days.findIndex((d) => d.date.toISOString().slice(0, 10) === h.centre));
   const heads = days.map((d, i) => `
     <div class="dp-col${i === mid ? ' hist-mid' : ''}">
       <b>${dayLabel(d.date, data.tz)}</b>
@@ -655,9 +658,8 @@ export function historyCard(data, opts = {}) {
   }).join('');
 
   return shell(`
-    <p class="dp-summary">${h.year} · ${esc(dateLabel(days[0].date, data.tz))} to ${
-      esc(dateLabel(days[days.length - 1].date, data.tz))} · rainfall in mm</p>
-    <div class="dp-scroll">
+    <p class="dp-summary">${h.year} · daily high and low, rainfall in mm below</p>
+    <div class="dp-scroll" data-hist-scroll data-centre="${mid}">
       <div style="width:${W}px">
         <div class="dp-row">${heads}</div>
         <svg class="dp-chart" width="${W}" height="${CHART_H}" viewBox="0 0 ${W} ${CHART_H}">
@@ -666,7 +668,48 @@ export function historyCard(data, opts = {}) {
         </svg>
         <div class="dp-row hist-feet">${feet}</div>
       </div>
-    </div>`);
+    </div>
+    ${monthlyChart(h)}`);
+}
+
+/* Monthly rainfall for the chosen year against this year, paired per month so
+   the comparison is the point rather than two charts to hold in your head. */
+function monthlyChart(h) {
+  const past = h.monthlyPast ?? [], now = h.monthlyNow ?? [];
+  if (!past.some((v) => v != null) && !now.some((v) => v != null)) return '';
+
+  const M = ['J', 'F', 'M', 'A', 'M', 'J', 'J', 'A', 'S', 'O', 'N', 'D'];
+  const peak = Math.max(1, ...past.filter((v) => v != null), ...now.filter((v) => v != null));
+  const W = 336, H = 118, base = H - 26, top = 16;
+  const slot = W / 12;
+
+  const bars = M.map((_, i) => {
+    const bar = (v, dx, cls) => {
+      if (v == null) return '';
+      const hgt = Math.max(v > 0 ? 2 : 0, (v / peak) * (base - top));
+      return `<rect x="${(i * slot + slot / 2 + dx - 6).toFixed(1)}" y="${(base - hgt).toFixed(1)}"
+        width="12" height="${hgt.toFixed(1)}" rx="2.5" class="${cls}"/>`;
+    };
+    return bar(past[i], -7, 'mo-past') + bar(now[i], 7, 'mo-now');
+  }).join('');
+
+  const labels = M.map((m, i) => `
+    <text x="${(i * slot + slot / 2).toFixed(1)}" y="${H - 10}" text-anchor="middle"
+      font-size="11" font-weight="700" fill="var(--on-surface-var)">${m}</text>`).join('');
+
+  const total = (a) => { const v = a.filter((x) => x != null); return v.length ? Math.round(v.reduce((s, x) => s + x, 0)) : null; };
+  const tPast = total(past), tNow = total(now);
+
+  return `
+    <div class="mo-wrap">
+      <div class="mo-key">
+        <span><i class="mo-sw mo-past"></i>${h.year}${tPast != null ? ` · ${tPast} mm` : ''}</span>
+        <span><i class="mo-sw mo-now"></i>${h.nowYear}${tNow != null ? ` · ${tNow} mm` : ''}</span>
+      </div>
+      <svg viewBox="0 0 ${W} ${H}" class="mo-chart">${bars}${labels}</svg>
+      <p class="mo-note">Monthly rainfall. ${h.nowYear} runs to the last few days
+        — reanalysis lags real time, so the current month is partial.</p>
+    </div>`;
 }
 
 /* ── card assembly ────────────────────────────────── */
