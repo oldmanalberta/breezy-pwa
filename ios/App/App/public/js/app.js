@@ -205,6 +205,8 @@ function closeRadar() {
   host.classList.remove('on');
   host.setAttribute('aria-hidden', 'true');
   document.body.style.overflow = '';
+  // the radar panel can flip the renderer itself; keep Settings honest
+  $$('#seg-radarrender button').forEach((b) => b.classList.toggle('on', b.dataset.v === state.radarRender));
   if (current) startFx($('#fx'), fxKind(current.current.condition), state.fx === 'on');
 }
 
@@ -536,6 +538,7 @@ function wire() {
   seg('#seg-fx', 'fx', () => current && startFx($('#fx'), fxKind(current.current.condition), state.fx === 'on'));
   seg('#seg-maptheme', 'mapTheme', () => { if (current) paint(current, activePlace()); });
   seg('#seg-radarrender', 'radarRender');
+  seg('#seg-radardebug', 'radarDebug');
 
   renderOrder();
   $('#order-list').addEventListener('click', (e) => {

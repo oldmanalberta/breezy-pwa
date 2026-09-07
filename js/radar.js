@@ -84,6 +84,11 @@ export const LAYERS = {
 export const WIND_MODES = ['off', 'particles', 'full'];
 export const WIND_ICON =
   '<svg viewBox="0 0 24 24"><path d="M3 8h11a2.5 2.5 0 1 0-2.5-2.5h-2A4.5 4.5 0 1 1 14 10H3zm0 4h16a2.5 2.5 0 1 1-2.5 2.5h-2A4.5 4.5 0 1 0 19 10H3zm0 5h8a2 2 0 1 1-2 2H7a4 4 0 1 0 4-4H3z"/></svg>';
+/* Motion interpolation toggle: a scan with a trailing path, on when the
+   frames between the scans are being estimated. */
+export const SMOOTH_ICON =
+  '<svg viewBox="0 0 24 24"><path d="M4 17c3-6 5-6 8 0s5 6 8 0" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><circle cx="20" cy="17" r="2.2"/><path d="M4 7h4M10 7h3M15 7h2" stroke="currentColor" stroke-width="2" stroke-linecap="round" opacity=".55"/></svg>';
+
 export const windLabel = (m) =>
   m === 'particles' ? 'Wind on' : m === 'full' ? 'Wind + speed shading' : 'Wind off';
 
@@ -275,17 +280,25 @@ export function createRadar(host, { lat, lon, tz }) {
   /* Images are the default renderer because they are the ones that reliably
      work: the same mechanism drives the card, which renders correctly on
      hardware where the WebGL path draws a blank canvas with no error to catch.
-     Motion interpolation is opt-in until that is understood. */
-  let useFlow = state.radarRender === 'flow' && hasWebGL2();
+     Motion interpolation is switchable live from the panel — see setRenderer —
+     because the point of a raw scan next to a smoothed one is telling real
+     movement from invented movement. */
+  let useFlow = false;
+  let glDead = false;                    // context lost: WebGL is off for the session
   const glCanvas = document.createElement('canvas');
   glCanvas.className = 'rd-gl';
   let flowR = null;
-  if (useFlow) {
+
+  /* Build the GL renderer on first use rather than up front, so opening the
+     radar in standard mode costs nothing and switching later still works. */
+  function ensureFlow() {
+    if (flowR) return true;
+    if (glDead || !hasWebGL2()) return false;
     try {
       flowR = createFlowRenderer(glCanvas);
-      useFlow = !!flowR;
       flowR?.setStrength(1);
-    } catch (e) { console.warn('WebGL2 radar unavailable', e); useFlow = false; }
+    } catch (e) { console.warn('WebGL2 radar unavailable', e); flowR = null; }
+    return !!flowR;
   }
 
   host.innerHTML = `
@@ -323,6 +336,8 @@ export function createRadar(host, { lat, lon, tz }) {
            aria-label="${l.label}" title="${l.label}">${l.icon}</button>`).join('')}
       <button class="rd-layer rd-windbtn" id="rd-windbtn" data-rd="wind"
         aria-label="Wind overlay">${WIND_ICON}<i class="rd-winddot"></i></button>
+      <button class="rd-layer rd-smoothbtn" id="rd-smoothbtn" data-rd="smooth"
+        aria-label="Smooth motion">${SMOOTH_ICON}</button>
     </div>
     <div class="rd-bottom">
       <div class="rd-loading" id="rd-loading" hidden>
@@ -356,33 +371,65 @@ export function createRadar(host, { lat, lon, tz }) {
   const slider = host.querySelector('#rd-slider');
   const playBtn = host.querySelector('.rd-play');
 
+  /* Drop the image frames but leave the GL canvas alone. Several failure
+     paths used to wipe the frame layer with innerHTML = '', which also took
+     the WebGL canvas with it — and nothing put it back, so one failed smoke
+     load left smooth motion permanently blank for the rest of the session. */
+  const clearFrames = () => { for (const g of frameLayer.querySelectorAll('.rd-frame')) g.remove(); };
+
+  /* Optional stage-by-stage narration as toasts, for chasing bugs on a phone
+     with no console. Off unless Settings turns it on. */
+  const dbg = (msg) => { if (state.radarDebug === 'on') say(`[radar] ${msg}`); };
+
   /* A phone has no console. When the renderer quietly changes its mind the
      only way to know is to be told, so anything that used to be a console
      warning also surfaces as a toast. */
   const say = (msg) => host.dispatchEvent(new CustomEvent('radar-toast', { bubbles: true, detail: msg }));
 
-  if (state.radarRender === 'flow' && !useFlow) {
-    say('Smooth motion needs WebGL2, which this browser did not provide — showing standard frames');
+  /* A lost context leaves a permanently blank canvas. iOS reclaims GPU
+     resources aggressively when memory is tight, so treat it as a signal to
+     stop using WebGL for the rest of the session rather than retry into the
+     same wall. */
+  glCanvas.addEventListener('webglcontextlost', (e) => {
+    e.preventDefault();
+    console.warn('WebGL context lost; reverting radar to images');
+    say('Graphics context was lost — showing standard frames');
+    glDead = true;
+    setRenderer('images', { quiet: true });
+  });
+
+  /* Switch between the raw scans and motion-interpolated playback, live. The
+     frame layer is rebuilt from scratch either way: the image path owns a
+     stack of <div class="rd-frame">, the GL path owns one canvas, and each
+     assumes it is the only thing in there. */
+  function setRenderer(mode, { quiet = false } = {}) {
+    const wantFlow = mode === 'flow';
+    if (wantFlow && !ensureFlow()) {
+      if (!quiet) say(glDead
+        ? 'Smooth motion is off for this session — the graphics context was lost'
+        : 'Smooth motion needs WebGL2, which this browser did not provide');
+      mode = 'images';
+    }
+    if (state.radarRender !== mode) set('radarRender', mode);
+    const on = mode === 'flow';
+    paintSmoothButton(on);
+    if (on === useFlow && (on ? frameLayer.contains(glCanvas) : true)) return;
+
+    stop();
+    useFlow = on;
+    ready = false;
+    frameLayer.innerHTML = '';
+    if (on) frameLayer.appendChild(glCanvas);
+    loadedFor = null;
+    drawFrames();
   }
 
-  // attach the GL surface once and leave it there; rebuilds swap textures
-  // underneath rather than tearing the element out of the DOM
-  if (useFlow) {
-    frameLayer.appendChild(glCanvas);
-    /* A lost context leaves a permanently blank canvas. iOS reclaims GPU
-       resources aggressively when memory is tight, so treat it as a signal to
-       stop using WebGL for the rest of the session rather than retry into the
-       same wall. */
-    glCanvas.addEventListener('webglcontextlost', (e) => {
-      e.preventDefault();
-      console.warn('WebGL context lost; reverting radar to images');
-      say('Graphics context was lost — showing standard frames');
-      useFlow = false;
-      ready = false;
-      glCanvas.remove();
-      loadedFor = null;
-      drawFrames();
-    });
+  function paintSmoothButton(on) {
+    const b = host.querySelector('#rd-smoothbtn');
+    if (!b) return;
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-label', on ? 'Smooth motion on' : 'Smooth motion off');
+    b.title = on ? 'Smooth motion on — tap for raw scans' : 'Raw scans — tap for smooth motion';
   }
 
   /* ── base tiles ── */
@@ -473,7 +520,17 @@ export function createRadar(host, { lat, lon, tz }) {
     // on some engines. The echo check below reads a small copy instead.
     const ctx = c.getContext('2d');
     c.loaded = bitmaps.some(Boolean);     // did anything at all arrive?
+    /* Softening is baked in here for the GL path rather than applied as a CSS
+       filter on the canvas. WebKit can composite a CSS-filtered WebGL canvas
+       as nothing at all — no error, just an empty layer — which is what smoke
+       (the only softened layer) did under smooth motion while precipitation
+       drew fine. It also means motion is estimated on the smoothed field,
+       which is the one you actually see. */
+    if (layer.soft && 'filter' in ctx) {
+      ctx.filter = `blur(${(layer.soft * scale).toFixed(1)}px) saturate(1.5) contrast(1.15)`;
+    }
     for (const b of bitmaps) if (b) { ctx.drawImage(b, 0, 0, w, h); b.close?.(); }
+    ctx.filter = 'none';
 
     /* Note whether this frame contains any echo at all. A clear sky renders
        exactly like a broken radar — blank — so the panel needs to be able to
@@ -673,17 +730,19 @@ export function createRadar(host, { lat, lon, tz }) {
       const okCount = settled.filter(Boolean).length;
       if (!okCount) {
         // nothing arrived: drop the old layer's imagery rather than implying it
-        frameLayer.innerHTML = '';
+        clearFrames();
         frameLayer.classList.remove('reloading');
         ready = false;
         updateLoading(1, 1);
         stamp.innerHTML = `${layer.label} <span class="rd-age">unavailable</span>`;
         showLayerError(layer);
+        dbg(`${layer.label}: 0 of ${settled.length} images arrived`);
         return;
       }
 
-      frameLayer.innerHTML = '';
+      clearFrames();
       for (const g of groups) frameLayer.appendChild(g);
+      dbg(`${layer.label}: ${okCount}/${settled.length} images, showing frame ${idx + 1}/${total}`);
       setEmptyNotice(await echo);
       ready = true;
       frameLayer.classList.remove('reloading');
@@ -704,6 +763,8 @@ export function createRadar(host, { lat, lon, tz }) {
       (n) => updateLoading(n, total, loadLabel),
     );
     if (loadedFor !== myKey) return;            // a pan/zoom superseded this load
+    dbg(`${layer.label}: ${composites.filter((c) => c.loaded).length}/${composites.length} frames fetched, `
+      + `echo max ${Math.max(...composites.map((c) => c.echoPct)).toFixed(1)}%`);
 
     /* Same honesty as the image path: if GeoMet returned nothing for any
        frame, say the layer is unavailable rather than showing a clear sky. */
@@ -755,11 +816,13 @@ export function createRadar(host, { lat, lon, tz }) {
            every opening, and looked exactly like the setting doing nothing. */
         const richest = composites.reduce((b, c, i) => (c.echoPct > composites[b].echoPct ? i : b), 0);
         const drawn = composites[richest].echoPct > 1 ? flowR.probe(richest) : -1;
+        dbg(`${layer.label}: GPU build ok, ${flowR.frameCount} frames, probe ${drawn}`);
         if (drawn === 0) {
           console.warn('WebGL radar produced an empty frame; using images instead');
           say('Smooth motion drew nothing on this device — showing standard frames');
           useFlow = false;
           glCanvas.remove();
+          paintSmoothButton(false);
         } else {
           release();                     // the cross-fade fallback below still needs them otherwise
           ready = true;
@@ -773,11 +836,13 @@ export function createRadar(host, { lat, lon, tz }) {
         say(`Smooth motion failed (${e?.message ?? e}) — showing standard frames`);
         useFlow = false;
         glCanvas.remove();
+        paintSmoothButton(false);
       }
     }
 
     // Fallback: stack the composited frames and cross-fade between them.
-    frameLayer.innerHTML = '';
+    clearFrames();
+    dbg(`${layer.label}: cross-fade fallback with ${composites.length} frames`);
     composites.forEach((c, i) => {
       const g = document.createElement('div');
       g.className = 'rd-frame';
@@ -897,6 +962,7 @@ export function createRadar(host, { lat, lon, tz }) {
     try {
       const t = await fetchFrameTimes(l.frames ?? FRAMES, l.wms[0], l.timeMode ?? 'past');
       frames = t;
+      dbg(`${l.label}: ${t.length} time steps, ${useFlow ? 'smooth' : 'standard'} renderer`);
       idx = l.timeMode === 'future' ? 0 : Math.max(0, t.length - 1);
       slider.max = String(Math.max(0, t.length - 1));
       slider.value = String(idx);
@@ -907,7 +973,8 @@ export function createRadar(host, { lat, lon, tz }) {
          early and whatever the previous layer left behind stays on screen,
          timestamp and all. Clear it and say so. */
       console.warn('layer times failed', e);
-      frameLayer.innerHTML = '';
+      dbg(`${l.label}: time axis failed — ${e?.message ?? e}`);
+      clearFrames();
       frameLayer.classList.remove('reloading');
       ready = false;
       updateLoading(1, 1);
@@ -1166,6 +1233,14 @@ export function createRadar(host, { lat, lon, tz }) {
       host.querySelector('#rd-empty').hidden = true;
     }
     if (act === 'wind') { cycleWind(); paintLegend(currentLayer()); return; }
+    if (act === 'smooth') {
+      const next = useFlow ? 'images' : 'flow';
+      setRenderer(next);
+      if (state.radarRender === next) say(next === 'flow'
+        ? 'Smooth motion on — frames between scans are estimated'
+        : 'Raw scans — only what the radar actually saw');
+      return;
+    }
     if (act === 'close-legend') { closeLegend(); return; }
     if (act === 'legend') {
       const box = host.querySelector('#rd-legendbox');
@@ -1227,6 +1302,8 @@ export function createRadar(host, { lat, lon, tz }) {
     playBtn.hidden = !l.animated;
     slider.hidden = !l.animated;
     paintWindButton();
+    // the saved preference goes through the same switch as the button
+    setRenderer(state.radarRender === 'flow' ? 'flow' : 'images');
     await loadLayerTimes();
     applyWind();
   })();

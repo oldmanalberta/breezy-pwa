@@ -137,7 +137,14 @@
     <div class="seg" id="seg-radarrender">
       <button data-v="images" class="on">Standard</button><button data-v="flow">Smooth motion</button>
     </div>
-    <p class="tiny pad" style="margin-top:8px">Standard shows the raw scans and works everywhere. Smooth motion estimates how precipitation is travelling and fills in the frames between, but it needs WebGL2 and renders nothing at all on some devices — if the radar comes up empty, switch back to Standard.</p>
+    <p class="tiny pad" style="margin-top:8px">Standard shows the raw scans and works everywhere. Smooth motion estimates how precipitation is travelling and fills in the frames between. The radar screen has the same switch in its button stack, so you can flip between them on the spot to tell real movement from estimated movement.</p>
+  </div>
+  <div class="setting">
+    <label>Radar diagnostics</label>
+    <div class="seg" id="seg-radardebug">
+      <button data-v="off" class="on">Off</button><button data-v="on">On</button>
+    </div>
+    <p class="tiny pad" style="margin-top:8px">Shows a short message at each stage of loading a radar layer — how many time steps, how many frames arrived, whether the GPU drew them. Useful when something on the radar comes up blank.</p>
   </div>
   <div class="setting">
     <label>Card order</label>

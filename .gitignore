@@ -15,3 +15,5 @@ __pycache__/
 # native wrapper build inputs
 node_modules/
 www/
+breezy-ios.tgz
+.claude/commit-msg.txt
