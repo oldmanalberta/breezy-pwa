@@ -733,7 +733,14 @@ export function createRadar(host, { lat, lon, tz }) {
           (p) => updateLoading(p, 1, 'Tracking motion'),
           () => loadedFor !== myKey,
         );
-        if (!committed) return;          // superseded; previous view left intact
+        /* The frames now live on the GPU; the canvases they came from are
+           dead weight. iOS keeps a hard budget on canvas backing store and,
+           once it is spent, hands out blank canvases with no error — so every
+           zoom was ~20 MB closer to a radar that silently stopped drawing.
+           Zeroing the size is the one reliable way to give the memory back
+           immediately rather than whenever the collector gets round to it. */
+        const release = () => { for (const c of composites) { c.width = 0; c.height = 0; } };
+        if (!committed) { release(); return; }   // superseded; previous view left intact
 
         /* Confirm the GPU actually drew the echo we know is in these frames.
            On some devices WebGL yields a blank canvas with no error at all, and
@@ -754,6 +761,7 @@ export function createRadar(host, { lat, lon, tz }) {
           useFlow = false;
           glCanvas.remove();
         } else {
+          release();                     // the cross-fade fallback below still needs them otherwise
           ready = true;
           frameLayer.classList.remove('reloading');
           updateLoading(1, 1);
@@ -806,10 +814,16 @@ export function createRadar(host, { lat, lon, tz }) {
   function showFrame(i, frac = 0) {
     idx = Math.max(0, Math.min(frames.length - 1, i));
 
-    if (useFlow && flowR && ready) {
-      flowR.draw(idx, frac);
+    if (useFlow && flowR) {
+      /* Nothing to do while a rebuild is in flight — the settle step after a
+         pan or zoom calls this before the new frames exist. This used to fall
+         through to the branch below, which walked every child of the frame
+         layer setting opacity, and the WebGL canvas is one of those children.
+         It got opacity 0, nothing in this path ever set it back, and the map
+         went blank after the first zoom. */
+      if (ready) flowR.draw(idx, frac);
     } else {
-      [...frameLayer.children].forEach((g, k) => { g.style.opacity = k === idx ? '1' : '0'; });
+      frameLayer.querySelectorAll('.rd-frame').forEach((g, k) => { g.style.opacity = k === idx ? '1' : '0'; });
     }
 
     slider.value = String(idx);
