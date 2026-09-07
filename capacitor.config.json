@@ -1,0 +1,13 @@
+{
+  "appId": "ca.oldmanalberta.breezy",
+  "appName": "Breezy",
+  "webDir": "www",
+  "ios": {
+    "contentInset": "never",
+    "backgroundColor": "#1b2a4a",
+    "preferredContentMode": "mobile"
+  },
+  "server": {
+    "iosScheme": "capacitor"
+  }
+}

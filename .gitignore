@@ -11,3 +11,7 @@ Desktop.ini
 # Python bytecode from tools/
 __pycache__/
 *.pyc
+
+# native wrapper build inputs
+node_modules/
+www/

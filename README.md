@@ -131,6 +131,41 @@ network first, so a reload picks up changes immediately.
 
 ---
 
+## Building it as a native iPhone app
+
+The same web app also ships inside a thin native shell, for the things a PWA
+cannot do on iOS (a Home Screen widget, real push notifications, an App Store
+listing). The shell is [Capacitor](https://capacitorjs.com) — a WKWebView
+loading the files from `www/` — and the Xcode project lives in `ios/`.
+
+You need a Mac with Xcode installed. Nothing else: the project uses Swift
+Package Manager, so there is no CocoaPods or Ruby to set up, and the synced web
+assets are committed under `ios/App/App/public` so Xcode builds without Node.
+
+1. Open `ios/App/App.xcodeproj` in Xcode.
+2. Select the **App** target → **Signing & Capabilities**, tick *Automatically
+   manage signing* and pick your **Team** (a free Apple ID works; add it under
+   Xcode → Settings → Accounts if it is not listed).
+3. Plug in the iPhone, pick it in the toolbar's device menu, and press **Run**.
+
+The first time, the phone will refuse to open the app until you trust the
+developer certificate: Settings → General → VPN & Device Management → your
+Apple ID → Trust. With a free Apple ID the build expires after 7 days and needs
+re-running from Xcode; a paid developer account lifts that.
+
+### Updating the web side
+
+After editing the web files, re-sync them into the native project (needs Node):
+
+```bash
+npm install
+npm run www && npx cap sync ios
+```
+
+Then run again from Xcode. Without Node, copying `index.html`, `sw.js`,
+`manifest.webmanifest` and the `css`, `js`, `fonts`, `icons` folders into
+`ios/App/App/public/` by hand does the same thing.
+
 ## Running it locally
 
 ```bash

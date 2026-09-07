@@ -1,0 +1,15 @@
+{
+  "name": "breezy-pwa",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Breezy — iPhone wrapper for the Breezy weather PWA",
+  "scripts": {
+    "www": "bash tools/build-www.sh",
+    "ios": "npm run www && npx cap sync ios && npx cap open ios"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^8.5.1",
+    "@capacitor/core": "^8.5.1",
+    "@capacitor/ios": "^8.5.1"
+  }
+}

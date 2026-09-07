@@ -1,0 +1,961 @@
+/* Breezy PWA — Material 3 Expressive styling, modelled on Breezy Weather's layout */
+
+/* Aileron by Sora Sagano, released into the public domain (CC0).
+   Self-hosted so the app stays dependency-free and works offline. */
+@font-face {
+  font-family: 'Aileron';
+  src: url('../fonts/Aileron-Light.otf') format('opentype');
+  font-weight: 300; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: 'Aileron';
+  src: url('../fonts/Aileron-Regular.otf') format('opentype');
+  font-weight: 400; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: 'Aileron';
+  src: url('../fonts/Aileron-Bold.otf') format('opentype');
+  font-weight: 700; font-style: normal; font-display: swap;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+:root {
+  /* sky gradient — overwritten per condition by js */
+  --sky-1: #1e3a8a;
+  --sky-2: #3b6bb8;
+  --sky-3: #7ba7d9;
+
+  /* --accent sits on the dark sky gradient. --accent-dark is the same hue
+     pushed toward navy so it stays legible on a white card. JS writes both;
+     the media query below picks which one text and strokes actually use, so
+     the choice tracks the OS theme without needing a JS listener. */
+  --accent: #8ab4f8;
+  --accent-dark: #3f6288;
+  --accent-ink: var(--accent);
+
+  /* Material 3 tonal surfaces (dark is the default, like Breezy at night) */
+  --bg:        #0e1116;
+  --surface:   #171b22;
+  --surface-2: #1e232c;
+  --surface-3: #262c36;
+  --on-surface: #e3e6ea;
+  --on-surface-var: #a8b0bb;
+  --outline: #333a45;
+
+  --r-xl: 28px;
+  --r-lg: 20px;
+  --r-md: 14px;
+
+  --safe-t: env(safe-area-inset-top, 0px);
+  --safe-b: env(safe-area-inset-bottom, 0px);
+
+  --ease: cubic-bezier(.2, 0, 0, 1);
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --accent-ink: var(--accent-dark);
+    --bg:        #f6f8fb;
+    --surface:   #ffffff;
+    --surface-2: #eef2f7;
+    --surface-3: #e3e9f1;
+    --on-surface: #161a20;
+    --on-surface-var: #5a6472;
+    --outline: #d6dde6;
+  }
+}
+
+html, body { height: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--on-surface);
+  font: 400 16px/1.45 'Aileron', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  overscroll-behavior-y: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+svg { width: 100%; height: 100%; fill: currentColor; display: block; }
+
+/* ── animated sky ─────────────────────────────────── */
+.sky {
+  position: fixed; inset: 0;
+  background: linear-gradient(170deg, var(--sky-1) 0%, var(--sky-2) 46%, var(--sky-3) 100%);
+  transition: background 900ms var(--ease);
+  z-index: 0;
+}
+.sky canvas { width: 100%; height: 100%; display: block; }
+
+#app { position: relative; z-index: 1; }
+
+/* ── hero ─────────────────────────────────────────── */
+/* Deliberately shorter than the viewport so the first card is already on
+   screen when a location opens, rather than hidden below the fold. */
+.hero {
+  position: relative;
+  min-height: 47svh;
+  padding: 0 20px;
+  display: flex; flex-direction: column;
+  color: #fff;
+  text-shadow: 0 1px 14px rgba(0, 0, 0, .28);
+}
+
+/* the controls float over the hero so the place block can sit at a
+   measured 10% from the top of the screen regardless of bar height */
+.hero-bar {
+  position: absolute; z-index: 2;
+  top: calc(var(--safe-t) + 10px); left: 20px; right: 20px;
+  display: flex; align-items: center; justify-content: space-between;
+}
+
+/* Sits clear of an iOS notification banner, which covers roughly the top
+   120pt and would otherwise hide the location name. */
+.hero-place {
+  margin-top: 20svh;
+  text-align: center;
+  min-width: 0;
+}
+.hero-place h1 {
+  margin: 0; font-size: 26px; font-weight: 400; letter-spacing: -.01em;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.hero-place p {
+  margin: 3px 0 0; font-size: 12.5px; font-weight: 300; opacity: .85;
+  display: inline-block;                 /* keep the tap target off the edges */
+  padding: 5px 12px; border-radius: 999px;
+  cursor: pointer; -webkit-user-select: none; user-select: none;
+  transition: background 160ms var(--ease);
+}
+.hero-place p:active { background: rgba(255, 255, 255, .18); }
+
+.icon-btn {
+  flex: none; width: 42px; height: 42px; padding: 9px;
+  border: 0; border-radius: 50%;
+  background: rgba(255, 255, 255, .14);
+  color: #fff; cursor: pointer;
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  transition: background 160ms var(--ease), transform 160ms var(--ease);
+}
+.icon-btn:active { transform: scale(.9); background: rgba(255, 255, 255, .26); }
+
+/* Active alerts, between the two hero buttons. Deliberately at the very top
+   even though an incoming notification banner can cover it: a warning that is
+   briefly hidden is better than one parked below the fold, and it reappears
+   the moment the notification clears. */
+/* Same translucent treatment as the hero buttons, with the text in the sky's
+   own accent — which JS rewrites per condition, so it lands yellowish under a
+   daytime sky and blue at night without needing its own theme logic. Red would
+   have been louder than the app anywhere else. */
+.alert-banner {
+  flex: 1; min-width: 0; margin: 0 10px;
+  display: flex; align-items: center; gap: 8px;
+  height: 42px; padding: 0 14px;
+  border: 0; border-radius: 999px;
+  background: rgba(255, 255, 255, .16);
+  color: var(--accent);
+  font: inherit; font-size: 13px; font-weight: 700;
+  cursor: pointer; text-align: left;
+  text-shadow: 0 1px 8px rgba(0, 0, 0, .45);
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  transition: background 160ms var(--ease);
+}
+.alert-banner:active { background: rgba(255, 255, 255, .26); }
+.alert-banner[hidden] { display: none; }
+.alert-banner .ab-text {
+  flex: 1; min-width: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ab-dot {
+  flex: none; width: 8px; height: 8px; border-radius: 50%;
+  background: currentColor;
+  animation: abPulse 2.4s ease-in-out infinite;
+}
+.ab-chev {
+  flex: none; width: 18px; height: 18px;
+  transition: transform 220ms var(--ease);
+}
+.alert-banner[aria-expanded="true"] .ab-chev { transform: rotate(180deg); }
+.alert-banner[aria-expanded="true"] .ab-dot { animation: none; }
+@keyframes abPulse { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
+
+/* The alerts themselves drop from under the bar and cover the hero, rather
+   than living in the card list. They are the one thing worth interrupting the
+   temperature for, but only once you have asked to see them. */
+.alert-drop {
+  position: absolute; z-index: 3;
+  left: 14px; right: 14px;
+  top: calc(var(--safe-t) + 60px);
+  max-height: 62svh; overflow-y: auto;
+  background: var(--surface);
+  color: var(--on-surface);
+  border-radius: var(--r-lg);
+  padding: 8px;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, .55);
+  transform-origin: top center;
+  animation: dropIn 240ms var(--ease);
+}
+.alert-drop[hidden] { display: none; }
+@keyframes dropIn {
+  from { opacity: 0; transform: translateY(-12px) scaleY(.96); }
+  to   { opacity: 1; transform: translateY(0) scaleY(1); }
+}
+.alert-drop .alert { margin: 0 0 6px; }
+.alert-drop .alert:last-of-type { margin-bottom: 0; }
+.alert-drop-close {
+  display: block; width: 100%; margin-top: 8px;
+  border: 0; border-radius: var(--r-md); padding: 11px;
+  background: var(--surface-2); color: var(--on-surface);
+  font: inherit; font-size: 13px; font-weight: 700; cursor: pointer;
+}
+
+.hero-main {
+  flex: 1;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  padding-bottom: 0;
+}
+
+/* icon beside the temperature rather than above it — stacking them cost
+   about 100px of height the 7-day card needs */
+.hero-now {
+  display: flex; align-items: center; justify-content: center;
+  gap: 6px; margin-top: 6px;
+}
+.hero-icon { width: 78px; height: 78px; flex: none; }
+
+.hero-temp {
+  font-size: clamp(64px, 19vw, 92px);
+  font-weight: 700; line-height: .92; letter-spacing: -.04em;
+}
+.hero-temp .deg { font-weight: 700; opacity: .5; }
+
+.hero-cond { font-size: 18px; font-weight: 400; margin-top: 4px; text-align: center; }
+.hero-range { font-size: 14px; opacity: .88; margin-top: 4px; font-weight: 300; }
+
+/* location pager dots */
+.place-dots {
+  display: flex; justify-content: center; gap: 7px;
+  min-height: 8px; margin-bottom: 6px;
+}
+.place-dots i {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: rgba(255, 255, 255, .42);
+  transition: background 200ms var(--ease), width 200ms var(--ease);
+}
+.place-dots i.on { background: #fff; width: 18px; border-radius: 4px; }
+
+/* The bob is a gentle hint, not a demand for attention. It also stops once you
+   have obviously seen it — an indicator still jumping while you scroll past is
+   just noise. */
+.scroll-cue {
+  width: 30px; height: 30px; margin: 0 auto;
+  padding-bottom: calc(10px + var(--safe-b));
+  opacity: .5;
+  animation: bob 3.2s ease-in-out infinite;
+  transition: opacity 260ms var(--ease);
+}
+.scroll-cue.gone { opacity: 0; animation: none; pointer-events: none; }
+@keyframes bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(5px); } }
+
+/* hero slide when paging between locations */
+.hero.slide-l { animation: slideL 320ms var(--ease); }
+.hero.slide-r { animation: slideR 320ms var(--ease); }
+@keyframes slideL {
+  from { opacity: 0; transform: translateX(26px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+@keyframes slideR {
+  from { opacity: 0; transform: translateX(-26px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+/* ── card sheet ───────────────────────────────────── */
+.sheet {
+  background: var(--bg);
+  border-radius: var(--r-xl) var(--r-xl) 0 0;
+  padding: 10px 14px calc(28px + var(--safe-b));
+  box-shadow: 0 -12px 40px rgba(0, 0, 0, .34);
+  min-height: 60svh;
+}
+.sheet::before {
+  content: ""; display: block;
+  width: 34px; height: 4px; margin: 6px auto 14px;
+  border-radius: 2px; background: var(--outline);
+}
+
+.card {
+  background: var(--surface);
+  border-radius: var(--r-xl);
+  padding: 18px;
+  margin-bottom: 12px;
+  overflow: hidden;
+}
+.card-head {
+  display: flex; align-items: center; gap: 9px;
+  font-size: 12.5px; font-weight: 700;
+  letter-spacing: .07em; text-transform: uppercase;
+  color: var(--accent-ink);
+  margin-bottom: 14px;
+}
+.card-head .ci { width: 17px; height: 17px; flex: none; }
+
+/* alerts */
+.alert {
+  display: block; width: 100%; text-align: left;
+  border: 0; border-left: 4px solid var(--al, #f5a623);
+  background: color-mix(in srgb, var(--al, #f5a623) 14%, var(--surface));
+  color: var(--on-surface);
+  border-radius: var(--r-md);
+  padding: 13px 15px; margin-bottom: 9px;
+  font: inherit; cursor: pointer;
+}
+.alert b { display: block; font-size: 15px; margin-bottom: 3px; }
+.alert span { font-size: 13px; color: var(--on-surface-var); }
+.alert p {
+  margin: 9px 0 0; font-size: 13.5px; line-height: 1.5;
+  white-space: pre-wrap; display: none;
+}
+.alert.open p { display: block; }
+
+/* hourly */
+.hourly-wrap { margin: 0 -18px; padding: 0 18px; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.hourly-wrap::-webkit-scrollbar { display: none; }
+.hourly { display: flex; gap: 0; position: relative; }
+.hr {
+  flex: none; width: 62px;
+  display: flex; flex-direction: column; align-items: center; gap: 5px;
+}
+.hr .i { width: 30px; height: 30px; color: var(--on-surface-var); }
+.hr .h { font-size: 12px; color: var(--on-surface-var); font-weight: 500; }
+.hr .p { font-size: 11px; color: var(--accent-ink); font-weight: 600; min-height: 15px; }
+.hr.now .h { color: var(--accent-ink); font-weight: 700; }
+.spark { display: block; margin: 2px 0 -2px; }
+
+/* daily panel (tabbed, horizontally scrolling) */
+.dp-summary {
+  margin: 0 0 9px; font-size: 13px; line-height: 1.45;
+  color: var(--on-surface-var);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.dp-pills {
+  display: flex; gap: 6px; margin: 0 -18px 10px; padding: 2px 18px;
+  overflow-x: auto; -webkit-overflow-scrolling: touch;
+}
+.dp-pills::-webkit-scrollbar { display: none; }
+.dp-pill {
+  flex: none; border: 0; border-radius: 999px;
+  padding: 7px 13px; cursor: pointer;
+  background: var(--surface-2); color: var(--on-surface-var);
+  font: inherit; font-size: 12.5px; font-weight: 600; white-space: nowrap;
+  transition: background 160ms var(--ease), color 160ms var(--ease);
+}
+.dp-pill.on { background: var(--accent); color: #06121f; }
+
+.dp-scroll { margin: 0 -18px; padding: 0 18px; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.dp-scroll::-webkit-scrollbar { display: none; }
+.dp-row { display: flex; }
+/* 72px, matching COL in render.js: the chart is drawn at that pitch, and a
+   column any wider drifts the curve off its labels one day at a time. */
+.dp-col {
+  flex: none; width: 72px;
+  display: flex; flex-direction: column; align-items: center; gap: 3px;
+}
+/* the recorded week: present but clearly not a forecast */
+.dp-col.dp-past b, .dp-col.dp-past em { opacity: .62; }
+.dp-col.dp-past .dp-ico { opacity: .5; }
+.dp-hint { margin: 8px 0 0; font-size: 11px; color: var(--on-surface-var); }
+.dp-col b { font-size: 13px; font-weight: 600; }
+.dp-col em {
+  font-style: normal; font-size: 10.5px; font-weight: 500;
+  color: var(--on-surface-var);
+}
+.dp-ico { width: 27px; height: 27px; margin-top: 2px; color: var(--on-surface-var); }
+.dp-ico.dim { opacity: .72; }
+.dp-pop { font-size: 11px; font-weight: 700; color: var(--accent-ink); min-height: 15px; }
+.dp-chart { display: block; color: var(--on-surface); }
+
+/* historical: today's column marked, rainfall as a small bar under the curves */
+.hist-mid b, .hist-mid em { color: var(--accent-ink); }
+.hist-mid b { font-weight: 700; }
+.hist-feet { align-items: flex-end; }
+.hist-feet .dp-col { justify-content: flex-end; gap: 2px; }
+.hist-bar {
+  width: 12px; border-radius: 3px 3px 0 0;
+  background: var(--accent-ink); opacity: .8;
+}
+
+/* monthly rainfall comparison */
+.mo-wrap { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--outline); }
+.mo-key { display: flex; gap: 16px; font-size: 12px; font-weight: 600; margin-bottom: 6px; }
+.mo-key span { display: flex; align-items: center; gap: 6px; }
+.mo-sw { width: 11px; height: 11px; border-radius: 3px; display: inline-block; }
+.mo-col { width: 64px; gap: 1px; }
+.mo-col b { font-size: 12px; color: var(--on-surface-var); margin-bottom: 2px; }
+.mo-col em { font-size: 10.5px; font-weight: 700; white-space: nowrap; letter-spacing: -.01em; }
+/* the chosen year is the subject and takes the accent everywhere — bars,
+   curves, legend; this year is the grey comparison behind it */
+.mo-past { fill: var(--accent-ink);     background: var(--accent-ink); }
+.mo-now  { fill: var(--on-surface-var); background: var(--on-surface-var); opacity: .5; }
+.mo-past-txt { fill: currentColor; color: var(--accent-ink); }
+.mo-now-txt  { fill: var(--on-surface-var); color: var(--on-surface-var); }
+.mo-line-past { stroke: var(--accent-ink); }
+.mo-line-now  { stroke: var(--on-surface-var); opacity: .6; }
+.mo-note { margin: 6px 0 0; font-size: 11px; line-height: 1.45; color: var(--on-surface-var); }
+.dp-chart .dp-lo { opacity: .55; }
+
+/* daily */
+.day-row {
+  display: grid;
+  grid-template-columns: 74px 30px 34px 1fr 34px;
+  align-items: center; gap: 8px;
+  padding: 9px 0;
+}
+.day-row + .day-row { border-top: 1px solid var(--outline); }
+.day-row .dn { font-size: 14px; font-weight: 600; }
+.day-row .dn em {
+  display: block; font-size: 11.5px; font-style: normal;
+  color: var(--on-surface-var); font-weight: 500; white-space: nowrap;
+}
+.day-row .dn em b { color: var(--accent-ink); font-weight: 700; }
+.day-row .di { width: 30px; height: 30px; color: var(--on-surface-var); }
+.day-row .lo, .day-row .hi { font-size: 14.5px; font-weight: 600; text-align: right; }
+.day-row .lo { color: var(--on-surface-var); text-align: left; }
+.bar { position: relative; height: 6px; border-radius: 3px; background: var(--surface-3); }
+.bar i {
+  position: absolute; top: 0; height: 6px; border-radius: 3px;
+  background: linear-gradient(90deg, #5aa9e6, #f7c948, #f2704b);
+}
+
+/* details grid */
+.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.tile { background: var(--surface-2); border-radius: var(--r-lg); padding: 13px 14px; }
+.tile .k {
+  font-size: 11.5px; text-transform: uppercase; letter-spacing: .055em;
+  color: var(--on-surface-var); font-weight: 600; margin-bottom: 5px;
+}
+.tile .v { font-size: 20px; font-weight: 600; letter-spacing: -.01em; }
+.tile .s { font-size: 12px; color: var(--on-surface-var); margin-top: 2px; }
+
+/* air quality */
+.aq-head {
+  display: flex; align-items: baseline; gap: 10px; margin-bottom: 12px;
+  color: inherit; text-decoration: none;
+}
+.aq-val { font-size: 40px; font-weight: 300; line-height: 1; letter-spacing: -.03em; }
+.aq-cat { font-size: 15px; font-weight: 600; }
+.aq-scale { height: 8px; border-radius: 4px; position: relative;
+  background: linear-gradient(90deg, #3ec46d 0%, #f7c948 33%, #f2704b 62%, #b5433a 82%, #7d3550 100%); }
+.aq-scale i {
+  position: absolute; top: -3px; width: 14px; height: 14px; margin-left: -7px;
+  border-radius: 50%; background: #fff; border: 3px solid var(--surface);
+  box-shadow: 0 1px 5px rgba(0, 0, 0, .4);
+}
+
+/* sun arc */
+.sun-arc { position: relative; }
+.sun-times { display: flex; justify-content: space-between; margin-top: 6px; font-size: 13px; color: var(--on-surface-var); }
+.sun-times b { display: block; color: var(--on-surface); font-size: 15px; font-weight: 600; }
+
+/* moon */
+.moon {
+  display: flex; align-items: center; gap: 16px;
+  margin-top: 16px; padding: 14px;
+  background: var(--surface-2); border-radius: var(--r-lg);
+}
+.moon-disc { flex: none; width: 62px; height: 62px; }
+.moon-info { min-width: 0; }
+.moon-info b { display: block; font-size: 16px; font-weight: 600; }
+.moon-info > span { font-size: 12.5px; color: var(--on-surface-var); }
+.moon-next { margin-top: 7px; font-size: 13.5px; }
+.moon-next em { font-style: normal; font-weight: 700; color: var(--accent-ink); }
+.moon-other { font-size: 12px; color: var(--on-surface-var); margin-top: 2px; }
+
+.attrib { text-align: center; padding: 14px 8px 0; color: var(--on-surface-var); }
+.attrib p { margin: 3px 0; font-size: 12px; }
+.tiny { font-size: 11px !important; opacity: .72; }
+.pad { padding: 0 4px; }
+
+/* ── panels ───────────────────────────────────────── */
+.scrim {
+  position: fixed; inset: 0; z-index: 8;
+  background: rgba(0, 0, 0, .5);
+  opacity: 0; pointer-events: none;
+  transition: opacity 260ms var(--ease);
+  backdrop-filter: blur(2px); -webkit-backdrop-filter: blur(2px);
+}
+.scrim.on { opacity: 1; pointer-events: auto; }
+
+.panel {
+  position: fixed; z-index: 9;
+  left: 0; right: 0; bottom: 0;
+  max-height: 88svh; overflow-y: auto; -webkit-overflow-scrolling: touch;
+  background: var(--surface);
+  border-radius: var(--r-xl) var(--r-xl) 0 0;
+  padding: 8px 18px calc(24px + var(--safe-b));
+  transform: translateY(101%);
+  transition: transform 320ms var(--ease);
+  box-shadow: 0 -10px 44px rgba(0, 0, 0, .45);
+}
+.panel.on { transform: translateY(0); }
+.panel::before {
+  content: ""; display: block;
+  width: 34px; height: 4px; margin: 6px auto 10px;
+  border-radius: 2px; background: var(--outline);
+}
+.panel-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.panel-head h2 { margin: 0; font-size: 21px; font-weight: 600; }
+.panel-head .icon-btn { background: var(--surface-2); color: var(--on-surface); }
+.panel-sub {
+  font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--on-surface-var); margin: 20px 0 8px; font-weight: 700;
+}
+
+.search-row { display: flex; gap: 8px; align-items: center; }
+#search-input {
+  flex: 1; min-width: 0;
+  background: var(--surface-2); border: 1px solid var(--outline);
+  color: var(--on-surface); border-radius: 999px;
+  padding: 12px 17px; font: inherit; font-size: 16px;
+}
+#search-input:focus { outline: 2px solid var(--accent-ink); outline-offset: -1px; }
+.pill {
+  flex: none; border: 0; border-radius: 999px;
+  background: var(--accent); color: #06121f;
+  padding: 12px 15px; font: inherit; font-size: 13.5px; font-weight: 600;
+  cursor: pointer; white-space: nowrap;
+}
+.pill:active { opacity: .8; }
+
+.results { margin-top: 10px; }
+.res {
+  display: flex; align-items: center; gap: 12px; width: 100%;
+  background: var(--surface-2); border: 0; border-radius: var(--r-lg);
+  color: var(--on-surface); text-align: left;
+  padding: 13px 15px; margin-bottom: 8px; font: inherit; cursor: pointer;
+}
+.res:active { background: var(--surface-3); }
+.res .rn { flex: 1; min-width: 0; }
+.res b { display: block; font-size: 15px; font-weight: 600; }
+.res span { font-size: 12.5px; color: var(--on-surface-var); }
+.res .rt { font-size: 19px; font-weight: 600; }
+.res .del { flex: none; width: 30px; height: 30px; padding: 7px; border: 0; border-radius: 50%;
+  background: transparent; color: var(--on-surface-var); cursor: pointer; }
+.res .flag { flex: none; font-size: 20px; }
+.empty { color: var(--on-surface-var); font-size: 13.5px; padding: 6px 2px 2px; }
+
+.setting { margin: 18px 0; }
+.setting > label {
+  display: block; font-size: 12px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .06em;
+  color: var(--on-surface-var); margin-bottom: 8px;
+}
+.seg { display: flex; gap: 6px; background: var(--surface-2); border-radius: 999px; padding: 4px; }
+.seg button {
+  flex: 1; border: 0; border-radius: 999px; padding: 10px 8px;
+  background: transparent; color: var(--on-surface-var);
+  font: inherit; font-size: 14px; font-weight: 600; cursor: pointer;
+  transition: background 160ms var(--ease), color 160ms var(--ease);
+}
+.seg button.on { background: var(--accent); color: #06121f; }
+.seg.col { flex-direction: column; border-radius: var(--r-lg); gap: 4px; }
+.seg.col button { text-align: left; border-radius: var(--r-md); padding: 12px 14px; }
+.seg.col button em {
+  display: block; font-style: normal; font-size: 11.5px;
+  font-weight: 500; opacity: .78; margin-top: 2px;
+}
+
+/* ── radar ────────────────────────────────────────── */
+.rd-card-preview {
+  position: relative; display: block; width: 100%;
+  aspect-ratio: 16 / 10; border: 0; padding: 0;
+  border-radius: var(--r-lg); overflow: hidden;
+  background: var(--surface-2); cursor: pointer;
+}
+.rd-card-preview img {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%; object-fit: cover;
+}
+.rd-card-preview .rd-base { opacity: .85; }
+.rd-card-preview .rd-open {
+  position: absolute; right: 10px; bottom: 10px;
+  background: rgba(10, 16, 26, .74); color: #fff;
+  padding: 7px 13px; border-radius: 999px;
+  font-size: 12.5px; font-weight: 600;
+  backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+}
+.rd-card-preview .rd-dot {
+  position: absolute; left: 50%; top: 50%;
+  width: 12px; height: 12px; margin: -6px 0 0 -6px;
+  border-radius: 50%; background: #fff;
+  border: 3px solid #e0453a; box-sizing: border-box;
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, .35);
+}
+
+.radar {
+  position: fixed; inset: 0; z-index: 30;
+  background: var(--bg);
+  display: none; flex-direction: column;
+}
+.radar.on { display: flex; }
+
+.rd-map {
+  position: absolute; inset: 0;
+  overflow: hidden; touch-action: none; cursor: grab;
+  background: var(--surface-2);
+}
+.rd-map:active { cursor: grabbing; }
+
+.rd-tiles, .rd-frames {
+  position: absolute; inset: 0;
+  transform-origin: 50% 50%;
+  will-change: transform;
+}
+.rd-tiles { transform: scale(var(--rd-scale, 1)); }
+.rd-frames {
+  transform: translate(var(--rd-dx, 0px), var(--rd-dy, 0px)) scale(var(--rd-scale, 1));
+  pointer-events: none;
+  transition: opacity 160ms linear;
+}
+/* imagery from the previous extent is stale the moment the map moves */
+.rd-frames.reloading { opacity: 0; }
+.rd-tile {
+  position: absolute; top: 0; left: 0;
+  width: 256px; height: 256px;
+  transform-origin: 0 0;
+}
+/* Cross-fade is only the fallback now — when WebGL2 is available the radar is
+   a single canvas that warps between scans instead. */
+.rd-frame {
+  position: absolute; inset: 0;
+  transition: opacity 460ms cubic-bezier(.4, 0, .6, 1);
+}
+.rd-frame > canvas,
+.rd-frame > img {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  /* Only a whisper of softening: the imagery is fetched at device pixel ratio
+     and the GPU already samples it bilinearly, so heavy blur just smears it. */
+  filter: saturate(1.18) contrast(1.05);
+}
+/* Coarse model fields get blurred back toward the smooth field their banding
+   was drawn from. The saturation lift compensates for the blur pulling colours
+   toward their neighbours, and the extra contrast keeps the plume edge from
+   dissolving into nothing. */
+.rd-frames.soft .rd-frame > img {
+  filter: blur(var(--rd-soft, 0px)) saturate(1.5) contrast(1.15);
+  /* per-overlay: smoke is a broad wash and needs to sit lighter than radar so
+     roads and place names stay readable underneath it */
+  opacity: var(--rd-op, .88);
+  will-change: opacity;
+}
+
+.rd-wind {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  opacity: .9;
+  pointer-events: none;
+}
+/* speed shading sits under the particles and stays well back so the map reads */
+.rd-wind-speed {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  opacity: .42;
+  pointer-events: none;
+  mix-blend-mode: multiply;
+}
+
+/* legend ramps drawn locally, for the overlays whose colours aren't ECCC's */
+.rd-legendramp { display: flex; gap: 8px; }
+.rd-legendramp[hidden] { display: none; }
+.rd-ramp { width: 26px; border-radius: 4px; min-height: 132px; }
+.rd-ramp-wind {
+  background: linear-gradient(to bottom,
+    rgb(198,52,46), rgb(220,100,50), rgb(226,160,56),
+    rgb(180,190,70), rgb(70,178,130), rgb(58,158,190), rgb(60,110,190));
+}
+.rd-ramp-cap {
+  align-self: center; font-size: 10.5px; font-weight: 700;
+  writing-mode: vertical-rl; opacity: .7;
+}
+.rd-ramp-keys {
+  display: flex; flex-direction: column; justify-content: space-between;
+  font-size: 11px; font-weight: 600; line-height: 1;
+}
+
+/* the GL surface draws its own opacity in the shader */
+.rd-gl {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  filter: saturate(1.12);
+}
+/* smoke gets the same softening on the GL surface as on plain images: the
+   warp interpolates between frames, it does not smooth the model grid within one */
+.rd-frames.soft .rd-gl {
+  filter: blur(var(--rd-soft, 0px)) saturate(1.5) contrast(1.15);
+}
+
+/* A clear sky and a broken radar both render as nothing, so say which it is. */
+.rd-empty {
+  position: absolute; z-index: 1;
+  left: 50%; top: 50%; transform: translate(-50%, -50%);
+  width: min(300px, 82%); text-align: center;
+  background: rgba(12, 18, 28, .8); color: #fff;
+  border-radius: var(--r-lg); padding: 16px 18px;
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  box-shadow: 0 6px 26px rgba(0, 0, 0, .45);
+  /* the card itself stays transparent to drags so you can still pan the map
+     underneath it; only the dismiss button takes input */
+  pointer-events: none;
+}
+.rd-empty[hidden] { display: none; }
+/* a failure is a different message from an empty sky, so it looks different */
+.rd-fail { background: rgba(74, 26, 24, .88); z-index: 2; }
+.rd-empty b { display: block; font-size: 15px; font-weight: 600; margin-bottom: 5px; }
+.rd-empty span { font-size: 12.5px; line-height: 1.5; opacity: .85; }
+.rd-empty-x {
+  pointer-events: auto;
+  margin-top: 12px; border: 0; border-radius: 999px;
+  padding: 9px 20px; cursor: pointer;
+  background: #fff; color: #0b1420;
+  font: inherit; font-size: 13px; font-weight: 700;
+}
+
+.rd-pin {
+  position: absolute; top: 0; left: 0;
+  width: 14px; height: 14px; margin: -7px 0 0 -7px;
+  border-radius: 50%; background: #fff;
+  border: 3px solid #e0453a; box-sizing: border-box;
+  box-shadow: 0 1px 6px rgba(0, 0, 0, .5);
+  pointer-events: none;
+}
+
+.rd-top {
+  position: absolute; z-index: 2; left: 0; right: 0;
+  top: 0; padding: calc(var(--safe-t) + 10px) 14px 26px;
+  display: flex; align-items: center; gap: 12px;
+  color: #fff;
+  background: linear-gradient(180deg, rgba(6, 10, 18, .82), rgba(6, 10, 18, 0));
+  pointer-events: none;
+}
+.rd-top .icon-btn { pointer-events: auto; background: rgba(20, 28, 40, .6); }
+.rd-title b { display: block; font-size: 17px; font-weight: 600; }
+.rd-title > span { display: block; font-size: 13.5px; font-weight: 600; opacity: .95; }
+.rd-title .rd-age { font-weight: 300; font-size: 12px; opacity: .8; margin-left: 5px; }
+
+.rd-zoom {
+  position: absolute; z-index: 2; right: 14px; top: 50%;
+  transform: translateY(-50%);
+  display: flex; flex-direction: column; gap: 1px;
+  border-radius: var(--r-md); overflow: hidden;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, .4);
+}
+.rd-zoom button {
+  width: 42px; height: 42px; border: 0;
+  background: rgba(20, 28, 40, .82); color: #fff;
+  font-size: 21px; font-weight: 400; cursor: pointer;
+}
+.rd-zoom button:active { background: rgba(40, 54, 74, .92); }
+
+/* overlay pickers, stacked under the zoom controls on the same edge */
+.rd-layers {
+  position: absolute; z-index: 2; right: 14px; top: calc(50% + 60px);
+  display: flex; flex-direction: column; gap: 8px;
+}
+.rd-layer {
+  width: 42px; height: 42px; padding: 9px;
+  border: 0; border-radius: 50%;
+  background: rgba(20, 28, 40, .82); color: #fff;
+  cursor: pointer;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, .4);
+  transition: background 160ms var(--ease), color 160ms var(--ease);
+}
+.rd-layer svg { width: 100%; height: 100%; fill: currentColor; display: block; }
+.rd-layer.on { background: #fff; color: #0b1420; }
+
+/* Wind is a three-way toggle rather than one of the exclusive layers, so it
+   needs to show which of its states it is in, not just on or off. */
+.rd-windbtn { position: relative; }
+.rd-winddot {
+  position: absolute; right: 5px; bottom: 5px;
+  width: 8px; height: 8px; border-radius: 50%;
+  background: transparent; transition: background 160ms var(--ease);
+}
+.rd-windbtn.on .rd-winddot { background: #2f9bd6; }
+.rd-windbtn.full .rd-winddot {
+  background: linear-gradient(135deg, #3c6ebe 0%, #46b282 45%, #c6342e 100%);
+}
+
+.rd-wind[hidden], .rd-wind-speed[hidden] { display: none; }
+
+/* air quality faces + second reading */
+/* The face belongs to the US AQI only — AQHI has its own published wording and
+   never shipped a face, so adding one there invented an equivalence. */
+.aq-face { flex: none; width: 34px; height: 34px; display: block; }
+.aq-second {
+  display: flex; align-items: center; gap: 12px;
+  margin-top: 14px; padding: 12px 14px;
+  background: var(--surface-2); border-radius: var(--r-md);
+  color: inherit; text-decoration: none;
+}
+.aq-head, .aq-second { cursor: pointer; }
+.aq-head:active, .aq-second:active { opacity: .7; }
+.aq-info {
+  margin-left: auto; flex: none;
+  width: 15px; height: 15px; opacity: .45;
+  align-self: flex-start;
+}
+.aq-second b { font-size: 20px; font-weight: 700; }
+.aq-second b span { font-size: 11.5px; font-weight: 600; color: var(--on-surface-var); }
+.aq-second .s { font-size: 12.5px; color: var(--on-surface-var); }
+
+.rd-bottom {
+  position: absolute; z-index: 2; left: 0; right: 0; bottom: 0;
+  padding: 30px 16px calc(14px + var(--safe-b));
+  background: linear-gradient(0deg, rgba(6, 10, 18, .88) 55%, rgba(6, 10, 18, 0));
+  color: #fff;
+}
+.rd-loading { margin-bottom: 12px; }
+.rd-loading[hidden] { display: none; }
+.rd-loadtext { display: block; font-size: 12.5px; font-weight: 600; margin-bottom: 6px; }
+.rd-loadbar {
+  display: block; height: 4px; border-radius: 2px;
+  background: rgba(255, 255, 255, .26); overflow: hidden;
+}
+.rd-loadfill {
+  display: block; height: 100%; width: 0;
+  background: #fff; border-radius: 2px;
+  transition: width 180ms linear;
+}
+
+.rd-controls { display: flex; align-items: center; gap: 13px; }
+.rd-play:disabled { opacity: .45; cursor: default; }
+.rd-play {
+  flex: none; width: 46px; height: 46px; padding: 11px;
+  border: 0; border-radius: 50%;
+  background: #fff; color: #0b1420; cursor: pointer;
+}
+.rd-play.on { background: var(--accent); }
+.rd-slider {
+  flex: 1; min-width: 0; height: 4px; -webkit-appearance: none; appearance: none;
+  background: rgba(255, 255, 255, .3); border-radius: 2px; outline: none;
+}
+.rd-slider::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 20px; height: 20px; border-radius: 50%;
+  background: #fff; box-shadow: 0 1px 5px rgba(0, 0, 0, .5); cursor: pointer;
+}
+.rd-slider::-moz-range-thumb {
+  width: 20px; height: 20px; border: 0; border-radius: 50%;
+  background: #fff; box-shadow: 0 1px 5px rgba(0, 0, 0, .5); cursor: pointer;
+}
+.rd-legendbtn {
+  flex: none; height: 34px; padding: 0 13px; border: 0; border-radius: 999px;
+  background: rgba(255, 255, 255, .18); color: #fff;
+  font: inherit; font-size: 12.5px; font-weight: 700; cursor: pointer;
+  backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+}
+.rd-legendbtn.on { background: #fff; color: #0b1420; }
+
+/* ECCC ships the legend as a tall vertical ramp (124x413), far too big for the
+   control bar — so it lives behind a toggle at a size you can actually read. */
+.rd-legendbox {
+  position: absolute; z-index: 3;
+  right: 14px; bottom: calc(122px + var(--safe-b));
+  max-height: 46svh; overflow-y: auto;
+  background: rgba(252, 253, 255, .95); color: #0b1420;
+  border-radius: var(--r-md); padding: 10px 12px;
+  box-shadow: 0 6px 26px rgba(0, 0, 0, .5);
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+}
+.rd-legendbox[hidden] { display: none; }
+.rd-legendbox { cursor: pointer; }
+.rd-legendhint {
+  margin-top: 8px; text-align: center;
+  font-size: 10.5px; font-weight: 600; opacity: .55;
+}
+.rd-legendhead {
+  display: flex; justify-content: space-between; align-items: baseline; gap: 14px;
+  font-size: 12px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .05em; margin-bottom: 6px;
+}
+.rd-legendbox img { display: block; width: auto; max-width: 118px; height: auto; }
+
+.rd-maps {
+  display: flex; gap: 6px; margin: 12px -16px 0; padding: 0 16px;
+  overflow-x: auto; -webkit-overflow-scrolling: touch;
+}
+.rd-maps::-webkit-scrollbar { display: none; }
+.rd-map-pill {
+  flex: none; border: 0; border-radius: 999px;
+  padding: 8px 14px; cursor: pointer;
+  background: rgba(255, 255, 255, .17); color: #fff;
+  font: inherit; font-size: 12.5px; font-weight: 600; white-space: nowrap;
+  backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+}
+.rd-map-pill.on { background: #fff; color: #0b1420; }
+
+.rd-attrib { margin: 10px 0 0; font-size: 10.5px; line-height: 1.45; opacity: .78; }
+.rd-attrib a { color: inherit; }
+
+/* card order editor */
+.order { display: flex; flex-direction: column; gap: 6px; }
+.ord {
+  display: flex; align-items: center; gap: 8px;
+  background: var(--surface-2); border-radius: var(--r-md);
+  padding: 10px 10px 10px 14px;
+}
+.ord-name { flex: 1; min-width: 0; font-size: 14px; font-weight: 600; }
+.ord-btn {
+  flex: none; width: 34px; height: 34px; padding: 6px;
+  border: 0; border-radius: 50%;
+  background: var(--surface-3); color: var(--on-surface);
+  cursor: pointer;
+}
+.ord-btn:disabled { opacity: .3; cursor: default; }
+.ord-btn:active:not(:disabled) { background: var(--accent); color: #06121f; }
+
+.res.active { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+.toast {
+  /* above the radar overlay (z 30) so its toasts are visible */
+  position: fixed; z-index: 40;
+  left: 50%; bottom: calc(26px + var(--safe-b));
+  transform: translate(-50%, 140%);
+  background: var(--surface-3); color: var(--on-surface);
+  padding: 12px 20px; border-radius: 999px;
+  font-size: 14px; font-weight: 500;
+  box-shadow: 0 6px 26px rgba(0, 0, 0, .45);
+  max-width: 88vw; text-align: center;
+
+  /* Hiding by translate alone was not enough: the offset is a percentage of the
+     toast's own height, so an empty one (24px tall) only moved 34px and still
+     poked above the bottom edge as a stray blank pill. Take it out of sight
+     and out of the layer entirely when it isn't saying anything. */
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: transform 300ms var(--ease), opacity 220ms var(--ease),
+              visibility 0s linear 300ms;
+}
+.toast.on {
+  transform: translate(-50%, 0);
+  opacity: 1;
+  visibility: visible;
+  transition: transform 300ms var(--ease), opacity 220ms var(--ease),
+              visibility 0s linear 0s;
+}
+
+.skel { animation: pulse 1.5s ease-in-out infinite; }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .001ms !important; transition-duration: .001ms !important; }
+}
+
+@media (min-width: 620px) {
+  #app { max-width: 620px; margin: 0 auto; }
+  .grid { grid-template-columns: 1fr 1fr 1fr; }
+}
