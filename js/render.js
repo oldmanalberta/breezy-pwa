@@ -122,18 +122,25 @@ export function hourlyCard(data) {
 const COL = 72;          // px per day column
 const CHART_H = 114;     // px of chart between the day and night icons
 
+/* `past: true` marks the series that also make sense for days already gone —
+   the recorded high and low, how much fell, how hard it blew. Those modes get
+   the previous week prepended to the strip, parked off-screen to the left. A
+   forecast-only quantity like probability of precipitation has no recorded
+   counterpart, so the other modes show the forecast alone. */
 export const DAILY_MODES = {
   conditions: {
     label: 'Conditions',
     kind: 'range',
+    past: true,
     hi: (d) => d.hi, lo: (d) => d.lo,
     fmt: (v) => temp(v),
   },
   precipitation: {
     label: 'Precipitation',
     kind: 'bar',
+    past: true,
     val: (d) => d.precip,
-    alt: (d) => d.pop,
+    alt: (d) => (d.past ? null : d.pop),      // a chance of rain is not a record
     fmt: (v) => (v >= 10 ? Math.round(v) : Math.round(v * 10) / 10) + ' mm',
     altFmt: (v) => Math.round(v) + '%',
     colour: '#5aa9e6',
@@ -141,6 +148,7 @@ export const DAILY_MODES = {
   wind: {
     label: 'Wind',
     kind: 'bar',
+    past: true,
     val: (d) => d.wind,
     alt: (d) => d.gust,
     fmt: (v) => windVal(v) + ' ' + windUnit(),
@@ -203,7 +211,19 @@ function rangeChart(days, mode, W) {
   return `<svg class="dp-chart" width="${W}" height="${CHART_H}" viewBox="0 0 ${W} ${CHART_H}">
       ${line(mode.hi, 'dp-hi', -9)}
       ${line(mode.lo, 'dp-lo', 17)}
+      ${divider(days)}
     </svg>`;
+}
+
+/* A dashed rule where the record stops and the forecast starts, so the eye
+   does not read last Tuesday's high as a prediction. Nothing is drawn when the
+   strip holds forecast alone. */
+function divider(days) {
+  const n = days.filter((d) => d.past).length;
+  if (!n || n === days.length) return '';
+  const x = n * COL;
+  return `<line x1="${x}" y1="4" x2="${x}" y2="${CHART_H - 4}" stroke="var(--on-surface-var)"
+            stroke-width="1.5" stroke-dasharray="3 4" opacity=".6"/>`;
 }
 
 /* simple column chart with a value label above each bar */
@@ -228,17 +248,26 @@ function barChart(days, mode, W) {
             font-size="11" font-weight="600" fill="var(--on-surface-var)">${esc(mode.altFmt(alt))}</text>` : ''}`;
   }).join('');
 
-  return `<svg class="dp-chart" width="${W}" height="${CHART_H}" viewBox="0 0 ${W} ${CHART_H}">${bars}</svg>`;
+  return `<svg class="dp-chart" width="${W}" height="${CHART_H}" viewBox="0 0 ${W} ${CHART_H}">${bars}${divider(days)}</svg>`;
 }
 
 export function dailyCard(data, modeKey = 'conditions') {
-  const days = (data.daily ?? []).slice(0, 10);
-  if (!days.length) return '';
+  const ahead = (data.daily ?? []).slice(0, 10);
+  if (!ahead.length) return '';
 
-  const available = Object.entries(DAILY_MODES).filter(([, m]) => hasData(m, days));
+  const available = Object.entries(DAILY_MODES).filter(([, m]) => hasData(m, ahead));
   if (!available.length) return '';
   const key = available.some(([k]) => k === modeKey) ? modeKey : available[0][0];
   const mode = DAILY_MODES[key];
+
+  /* The week that has already happened sits to the left of today, off-screen
+     until you slide the strip back — a scroll gesture the panel already has.
+     Only for series a recorded value exists for. */
+  const before = mode.past
+    ? (data.past ?? []).slice(-7).map((d) => ({ ...d, past: true }))
+    : [];
+  const days = [...before, ...ahead];
+  const start = before.length;                   // column today sits in
 
   const W = days.length * COL;
   const today = new Date().toDateString();
@@ -246,7 +275,7 @@ export function dailyCard(data, modeKey = 'conditions') {
   const heads = days.map((d) => {
     const isToday = d.date && d.date.toDateString() === today;
     const name = d.label ?? (isToday ? 'Today' : dayLabel(d.date, data.tz));
-    return `<div class="dp-col">
+    return `<div class="dp-col${d.past ? ' dp-past' : ''}">
         <b>${esc(name)}</b>
         <em>${d.date ? dateLabel(d.date, data.tz) : ''}</em>
         <span class="dp-ico" title="${esc(d.text)}">${icon(d.condition, false)}</span>
@@ -256,9 +285,9 @@ export function dailyCard(data, modeKey = 'conditions') {
   /* The night icon renders in every series, not just Conditions. It is useful
      everywhere, and reserving the row unconditionally is what keeps the card
      the same height as you switch series — otherwise the sheet jumps. */
-  const feet = days.map((d) => `<div class="dp-col">
+  const feet = days.map((d) => `<div class="dp-col${d.past ? ' dp-past' : ''}">
       <span class="dp-ico dim">${icon(d.condition, true)}</span>
-      <span class="dp-pop">${d.pop != null && d.pop > 5 ? Math.round(d.pop) + '%' : ''}</span>
+      <span class="dp-pop">${!d.past && d.pop != null && d.pop > 5 ? Math.round(d.pop) + '%' : ''}</span>
     </div>`).join('');
 
   const chart = mode.kind === 'range' ? rangeChart(days, mode, W) : barChart(days, mode, W);
@@ -266,19 +295,22 @@ export function dailyCard(data, modeKey = 'conditions') {
   const pills = available.map(([k, m]) =>
     `<button class="dp-pill${k === key ? ' on' : ''}" data-daily-mode="${k}">${esc(m.label)}</button>`).join('');
 
-  const summary = days[0]?.summary
-    ? `<p class="dp-summary">${esc(days[0].summary)}</p>` : '';
+  const summary = ahead[0]?.summary
+    ? `<p class="dp-summary">${esc(ahead[0].summary)}</p>` : '';
 
-  return card(`${days.length}-day forecast`, G.cal, `
+  const hint = before.length
+    ? `<p class="dp-hint">Slide back for the past ${before.length} days</p>` : '';
+
+  return card(`${ahead.length}-day forecast`, G.cal, `
     ${summary}
     <div class="dp-pills">${pills}</div>
-    <div class="dp-scroll">
+    <div class="dp-scroll" data-daily-scroll data-start="${start}">
       <div style="width:${W}px">
         <div class="dp-row">${heads}</div>
         ${chart}
         <div class="dp-row">${feet}</div>
       </div>
-    </div>`);
+    </div>${hint}`);
 }
 
 /* ── details grid ─────────────────────────────────── */
@@ -672,30 +704,70 @@ export function historyCard(data, opts = {}) {
     ${monthlyChart(h)}`);
 }
 
-/* Monthly rainfall for the chosen year against this year, paired per month so
-   the comparison is the point rather than two charts to hold in your head. */
+/* The chosen year month by month against this year: mean high and low as two
+   curves, precipitation as paired bars with the millimetres written on them.
+   Twelve columns wide enough to carry numbers means it scrolls, like the daily
+   panel — the alternative was a chart that fits but says nothing. The chosen
+   year is the labelled one; this year is drawn behind it for shape, since a
+   dozen extra numbers would bury the twelve you came for. */
 function monthlyChart(h) {
   const past = h.monthlyPast ?? [], now = h.monthlyNow ?? [];
+  const tp = h.monthlyTempPast ?? { hi: [], lo: [] }, tn = h.monthlyTempNow ?? { hi: [], lo: [] };
   if (!past.some((v) => v != null) && !now.some((v) => v != null)) return '';
 
-  const M = ['J', 'F', 'M', 'A', 'M', 'J', 'J', 'A', 'S', 'O', 'N', 'D'];
-  const peak = Math.max(1, ...past.filter((v) => v != null), ...now.filter((v) => v != null));
-  const W = 336, H = 118, base = H - 26, top = 16;
-  const slot = W / 12;
+  const M = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const MC = 64;                                  // px per month column
+  const W = 12 * MC;
+  const x = (i) => i * MC + MC / 2;
 
+  /* ── temperature: mean high and low ── */
+  const temps = [...tp.hi, ...tp.lo, ...tn.hi, ...tn.lo].filter((v) => v != null);
+  let tempSvg = '';
+  if (temps.length) {
+    const TH = 104, padT = 22, padB = 22;
+    const max = Math.max(...temps), min = Math.min(...temps);
+    const span = Math.max(max - min, 1);
+    const y = (v) => padT + (1 - (v - min) / span) * (TH - padT - padB);
+
+    const path = (arr) => arr.map((v, i) => (v == null ? null : `${x(i)},${y(v).toFixed(1)}`))
+                             .filter(Boolean).join(' ');
+    const line = (arr, cls, extra = '') => {
+      const pts = path(arr);
+      return pts ? `<polyline points="${pts}" fill="none" stroke-width="2.5"
+        stroke-linecap="round" stroke-linejoin="round" class="${cls}" ${extra}/>` : '';
+    };
+    const labels = (arr, dy) => arr.map((v, i) => v == null ? '' :
+      `<text x="${x(i)}" y="${(y(v) + dy).toFixed(1)}" text-anchor="middle"
+         font-size="12.5" font-weight="600" fill="currentColor">${esc(temp(v))}</text>`).join('');
+
+    tempSvg = `<svg class="dp-chart" width="${W}" height="${TH}" viewBox="0 0 ${W} ${TH}">
+        ${line(tn.hi, 'mo-line-now', 'stroke-dasharray="2 5"')}
+        ${line(tn.lo, 'mo-line-now', 'stroke-dasharray="2 5"')}
+        ${line(tp.hi, 'mo-line-past')}
+        ${line(tp.lo, 'mo-line-past dp-lo')}
+        ${labels(tp.hi, -8)}${labels(tp.lo, 16)}
+      </svg>`;
+  }
+
+  /* ── precipitation: paired bars, each with its total ── */
+  const peak = Math.max(1, ...past.filter((v) => v != null), ...now.filter((v) => v != null));
+  const BH = 92, base = BH - 6, top = 18;
+  const mm = (v) => (v >= 100 ? Math.round(v) : v >= 10 ? Math.round(v) : Math.round(v * 10) / 10);
   const bars = M.map((_, i) => {
     const bar = (v, dx, cls) => {
       if (v == null) return '';
       const hgt = Math.max(v > 0 ? 2 : 0, (v / peak) * (base - top));
-      return `<rect x="${(i * slot + slot / 2 + dx - 6).toFixed(1)}" y="${(base - hgt).toFixed(1)}"
-        width="12" height="${hgt.toFixed(1)}" rx="2.5" class="${cls}"/>`;
+      const cx = x(i) + dx;
+      return `<rect x="${(cx - 7).toFixed(1)}" y="${(base - hgt).toFixed(1)}"
+          width="14" height="${hgt.toFixed(1)}" rx="3" class="${cls}"/>
+        <text x="${cx}" y="${(base - hgt - 5).toFixed(1)}" text-anchor="middle"
+          font-size="10" font-weight="700" class="${cls}-txt">${mm(v)}</text>`;
     };
-    return bar(past[i], -7, 'mo-past') + bar(now[i], 7, 'mo-now');
+    return bar(past[i], -9, 'mo-past') + bar(now[i], 9, 'mo-now');
   }).join('');
+  const barSvg = `<svg class="dp-chart" width="${W}" height="${BH}" viewBox="0 0 ${W} ${BH}">${bars}</svg>`;
 
-  const labels = M.map((m, i) => `
-    <text x="${(i * slot + slot / 2).toFixed(1)}" y="${H - 10}" text-anchor="middle"
-      font-size="11" font-weight="700" fill="var(--on-surface-var)">${m}</text>`).join('');
+  const heads = M.map((m) => `<div class="dp-col mo-col"><b>${m}</b></div>`).join('');
 
   const total = (a) => { const v = a.filter((x) => x != null); return v.length ? Math.round(v.reduce((s, x) => s + x, 0)) : null; };
   const tPast = total(past), tNow = total(now);
@@ -706,9 +778,16 @@ function monthlyChart(h) {
         <span><i class="mo-sw mo-past"></i>${h.year}${tPast != null ? ` · ${tPast} mm` : ''}</span>
         <span><i class="mo-sw mo-now"></i>${h.nowYear}${tNow != null ? ` · ${tNow} mm` : ''}</span>
       </div>
-      <svg viewBox="0 0 ${W} ${H}" class="mo-chart">${bars}${labels}</svg>
-      <p class="mo-note">Monthly rainfall. ${h.nowYear} runs to the last few days
-        — reanalysis lags real time, so the current month is partial.</p>
+      <div class="dp-scroll">
+        <div style="width:${W}px">
+          <div class="dp-row">${heads}</div>
+          ${tempSvg}
+          ${barSvg}
+        </div>
+      </div>
+      <p class="mo-note">Mean daily high and low, and total precipitation in mm, for each
+        month of ${h.year} — ${h.nowYear} dotted behind for comparison. ${h.nowYear} runs to
+        the last few days: reanalysis lags real time, so the current month is partial.</p>
     </div>`;
 }
 

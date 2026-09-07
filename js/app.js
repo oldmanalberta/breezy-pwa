@@ -89,6 +89,19 @@ function centreHistoryScroll() {
   box.scrollLeft = Math.max(0, col.offsetLeft + col.offsetWidth / 2 - box.clientWidth / 2);
 }
 
+/* Park the daily strip with today in the first column. The recorded week sits
+   to the left of it, reachable by sliding back, but a forecast panel that opens
+   on last Tuesday has its priorities wrong. */
+function parkDailyScroll() {
+  const box = $('[data-daily-scroll]');
+  if (!box) return;
+  const cols = box.querySelectorAll('.dp-row .dp-col');
+  const col = cols[Number(box.dataset.start || 0)];
+  // measured against the first column, not the box: the box has inner padding
+  // that offsetLeft includes, which parked the strip 18px past today
+  box.scrollLeft = col ? col.offsetLeft - cols[0].offsetLeft : 0;
+}
+
 /* Repaint the whole deck but hold the scroll position, so a card filling in
    underneath you doesn't move the page.
    The re-entrancy guard is belt and braces: paint() kicks off loadHistory(),
@@ -252,6 +265,7 @@ function paint(data, place, stale = false) {
     order: state.order ?? DEFAULT_ORDER,
   });
   loadHistory(place);
+  parkDailyScroll();
   centreHistoryScroll();
 
   const srcBits = [data.source.name];

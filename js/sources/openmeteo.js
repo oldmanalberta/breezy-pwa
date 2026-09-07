@@ -19,6 +19,8 @@ const DAILY = [
   'wind_gusts_10m_max', 'wind_direction_10m_dominant',
 ].join(',');
 
+export const PAST_DAYS = 7;
+
 const CURRENT = [
   'temperature_2m', 'relative_humidity_2m', 'apparent_temperature', 'is_day',
   'weather_code', 'surface_pressure', 'wind_speed_10m', 'wind_direction_10m', 'wind_gusts_10m',
@@ -86,6 +88,12 @@ export async function fetchOpenMeteo({ lat, lon, tz, model = null }) {
     current: CURRENT, hourly: HOURLY, daily: DAILY,
     timezone: tz || 'auto', timeformat: 'unixtime',
     forecast_days: '10', past_hours: '1',
+    /* The daily block also carries the week just gone, so the panel can be
+       slid back to what actually happened. Open-Meteo fills past days from its
+       model analysis — observations assimilated onto the grid — rather than a
+       thermometer at a station, so treat them as a close record, not the
+       official one. */
+    past_days: String(PAST_DAYS),
     wind_speed_unit: 'kmh', temperature_unit: 'celsius', precipitation_unit: 'mm',
   });
   if (model) params.set('models', model);
@@ -120,7 +128,7 @@ export async function fetchOpenMeteo({ lat, lon, tz, model = null }) {
   const uvNow = at(H.uv_index, hIdx);
 
   const DD = d.daily ?? {};
-  const daily = (DD.time ?? []).map((t, i) => {
+  const allDays = (DD.time ?? []).map((t, i) => {
     const date = D(t);
     return {
       date,
@@ -146,6 +154,20 @@ export async function fetchOpenMeteo({ lat, lon, tz, model = null }) {
       sunset: D(at(DD.sunset, i)),
     };
   });
+
+  /* Split at today. Open-Meteo stamps each day at local midnight in the
+     requested zone, so compare calendar dates in that zone rather than epoch
+     millis — a UTC comparison would shift the boundary by the zone offset. */
+  const todayKey = (() => {
+    try { return new Intl.DateTimeFormat('en-CA', { timeZone: d.timezone || tz || undefined }).format(new Date()); }
+    catch { return new Intl.DateTimeFormat('en-CA').format(new Date()); }
+  })();
+  const dayKey = (date) => {
+    try { return new Intl.DateTimeFormat('en-CA', { timeZone: d.timezone || tz || undefined }).format(date); }
+    catch { return new Intl.DateTimeFormat('en-CA').format(date); }
+  };
+  const past = allDays.filter((x) => x.date && dayKey(x.date) < todayKey);
+  const daily = allDays.filter((x) => !x.date || dayKey(x.date) >= todayKey);
 
   const label = model
     ? { id: 'gem', name: 'Open-Meteo · Canadian GEM (ECCC model)', short: 'GEM' }
@@ -177,6 +199,7 @@ export async function fetchOpenMeteo({ lat, lon, tz, model = null }) {
     },
     hourly,
     daily,
+    past,             // the days before today, same shape as `daily`
     alerts: [],
     air,
     sun: { sunrise: daily[0]?.sunrise ?? null, sunset: daily[0]?.sunset ?? null },

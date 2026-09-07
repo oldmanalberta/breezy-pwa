@@ -80,6 +80,8 @@ export async function loadWeather(loc, pref = 'auto') {
              and US AQI is the number most other apps report. */
           if (om.air?.index != null) data.airUs = om.air;
           mergeDailyExtras(data.daily, om.daily);
+          // ECCC has no "what happened last week" feed at all
+          data.past = om.past;
           data.supplement = 'Open-Meteo';
         } catch { /* ECCC alone is fine */ }
         return data;

@@ -46,18 +46,26 @@ async function archive(lat, lon, from, to) {
   return (await res.json()).daily ?? {};
 }
 
-/* Twelve monthly rainfall totals for a calendar year. The current year stops at
-   whatever the archive has — reanalysis lags real time by a few days — so the
-   final month is a partial total and is marked as such by the caller. */
-function monthlyTotals(daily) {
-  const months = Array(12).fill(null);
+/* Twelve months of a calendar year: total precipitation, and the mean daily
+   high and low. The current year stops at whatever the archive has —
+   reanalysis lags real time by a few days — so the final month is partial
+   (a partial total under-reads; a partial mean is merely less settled) and
+   is marked as such by the caller. */
+function monthlyStats(daily) {
+  const rain = Array(12).fill(null);
+  const hiSum = Array(12).fill(0), loSum = Array(12).fill(0), n = Array(12).fill(0);
   const t = daily.time ?? [], p = daily.precipitation_sum ?? [];
+  const hi = daily.temperature_2m_max ?? [], lo = daily.temperature_2m_min ?? [];
   for (let i = 0; i < t.length; i++) {
-    if (p[i] == null) continue;
     const m = Number(t[i].slice(5, 7)) - 1;
-    months[m] = (months[m] ?? 0) + p[i];
+    if (p[i] != null) rain[m] = (rain[m] ?? 0) + p[i];
+    if (hi[i] != null && lo[i] != null) { hiSum[m] += hi[i]; loSum[m] += lo[i]; n[m]++; }
   }
-  return months.map((v) => (v == null ? null : Math.round(v * 10) / 10));
+  return {
+    rain: rain.map((v) => (v == null ? null : Math.round(v * 10) / 10)),
+    hi: n.map((c, m) => (c ? Math.round((hiSum[m] / c) * 10) / 10 : null)),
+    lo: n.map((c, m) => (c ? Math.round((loSum[m] / c) * 10) / 10 : null)),
+  };
 }
 
 export async function fetchHistory(lat, lon, yearsAgo, now = new Date()) {
@@ -79,13 +87,16 @@ export async function fetchHistory(lat, lon, yearsAgo, now = new Date()) {
     archive(lat, lon, new Date(`${nowYear}-01-01T12:00:00`), lag),
   ]);
 
+  const mp = monthlyStats(pastAll), mn = monthlyStats(nowAll);
   return {
     yearsAgo,
     year: pastYear,
     nowYear,
     days: parseDaily(window),
     centre: iso(target),
-    monthlyPast: monthlyTotals(pastAll),
-    monthlyNow: monthlyTotals(nowAll),
+    monthlyPast: mp.rain,
+    monthlyNow: mn.rain,
+    monthlyTempPast: { hi: mp.hi, lo: mp.lo },
+    monthlyTempNow: { hi: mn.hi, lo: mn.lo },
   };
 }

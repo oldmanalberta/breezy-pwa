@@ -358,10 +358,16 @@ svg { width: 100%; height: 100%; fill: currentColor; display: block; }
 .dp-scroll { margin: 0 -18px; padding: 0 18px; overflow-x: auto; -webkit-overflow-scrolling: touch; }
 .dp-scroll::-webkit-scrollbar { display: none; }
 .dp-row { display: flex; }
+/* 72px, matching COL in render.js: the chart is drawn at that pitch, and a
+   column any wider drifts the curve off its labels one day at a time. */
 .dp-col {
-  flex: none; width: 74px;
+  flex: none; width: 72px;
   display: flex; flex-direction: column; align-items: center; gap: 3px;
 }
+/* the recorded week: present but clearly not a forecast */
+.dp-col.dp-past b, .dp-col.dp-past em { opacity: .62; }
+.dp-col.dp-past .dp-ico { opacity: .5; }
+.dp-hint { margin: 8px 0 0; font-size: 11px; color: var(--on-surface-var); }
 .dp-col b { font-size: 13px; font-weight: 600; }
 .dp-col em {
   font-style: normal; font-size: 10.5px; font-weight: 500;
@@ -387,9 +393,16 @@ svg { width: 100%; height: 100%; fill: currentColor; display: block; }
 .mo-key { display: flex; gap: 16px; font-size: 12px; font-weight: 600; margin-bottom: 6px; }
 .mo-key span { display: flex; align-items: center; gap: 6px; }
 .mo-sw { width: 11px; height: 11px; border-radius: 3px; display: inline-block; }
-.mo-chart { display: block; width: 100%; height: auto; }
-.mo-past { fill: var(--on-surface-var); background: var(--on-surface-var); opacity: .55; }
-.mo-now  { fill: var(--accent-ink);     background: var(--accent-ink); }
+.mo-col { width: 64px; }
+.mo-col b { font-size: 12px; color: var(--on-surface-var); }
+/* the chosen year is the subject and takes the accent everywhere — bars,
+   curves, legend; this year is the grey comparison behind it */
+.mo-past { fill: var(--accent-ink);     background: var(--accent-ink); }
+.mo-now  { fill: var(--on-surface-var); background: var(--on-surface-var); opacity: .5; }
+.mo-past-txt { fill: currentColor; }
+.mo-now-txt  { fill: var(--on-surface-var); }
+.mo-line-past { stroke: var(--accent-ink); }
+.mo-line-now  { stroke: var(--on-surface-var); opacity: .6; }
 .mo-note { margin: 6px 0 0; font-size: 11px; line-height: 1.45; color: var(--on-surface-var); }
 .dp-chart .dp-lo { opacity: .55; }
 
@@ -676,6 +689,11 @@ svg { width: 100%; height: 100%; fill: currentColor; display: block; }
   position: absolute; inset: 0;
   width: 100%; height: 100%;
   filter: saturate(1.12);
+}
+/* smoke gets the same softening on the GL surface as on plain images: the
+   warp interpolates between frames, it does not smooth the model grid within one */
+.rd-frames.soft .rd-gl {
+  filter: blur(var(--rd-soft, 0px)) saturate(1.5) contrast(1.15);
 }
 
 /* A clear sky and a broken radar both render as nothing, so say which it is. */

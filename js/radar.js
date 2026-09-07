@@ -356,6 +356,15 @@ export function createRadar(host, { lat, lon, tz }) {
   const slider = host.querySelector('#rd-slider');
   const playBtn = host.querySelector('.rd-play');
 
+  /* A phone has no console. When the renderer quietly changes its mind the
+     only way to know is to be told, so anything that used to be a console
+     warning also surfaces as a toast. */
+  const say = (msg) => host.dispatchEvent(new CustomEvent('radar-toast', { bubbles: true, detail: msg }));
+
+  if (state.radarRender === 'flow' && !useFlow) {
+    say('Smooth motion needs WebGL2, which this browser did not provide — showing standard frames');
+  }
+
   // attach the GL surface once and leave it there; rebuilds swap textures
   // underneath rather than tearing the element out of the DOM
   if (useFlow) {
@@ -367,6 +376,7 @@ export function createRadar(host, { lat, lon, tz }) {
     glCanvas.addEventListener('webglcontextlost', (e) => {
       e.preventDefault();
       console.warn('WebGL context lost; reverting radar to images');
+      say('Graphics context was lost — showing standard frames');
       useFlow = false;
       ready = false;
       glCanvas.remove();
@@ -435,14 +445,19 @@ export function createRadar(host, { lat, lon, tz }) {
      canvas. Going through fetch + createImageBitmap (rather than an <img>)
      keeps the result CORS-clean so WebGL can sample it — GeoMet sends
      Access-Control-Allow-Origin: *. */
-  async function loadComposite(bbox, iso, scale) {
-    const [rain, snow] = await Promise.all([RAIN, SNOW].map(async (layer) => {
+  async function loadComposite(layer, bbox, iso, scale) {
+    /* Whatever the overlay is made of — rain and snow for radar, one PM2.5
+       field for smoke — fetched with that layer's own style. An earlier
+       version had RAIN and SNOW hard-wired here, so smooth motion on the smoke
+       layer quietly loaded radar at the smoke forecast's future timestamps,
+       got nothing back, and drew a blank. */
+    const bitmaps = await Promise.all(layer.wms.map(async (name) => {
       // A wide bbox makes GeoMet render a lot; without a ceiling one slow
       // layer holds up the whole run.
       const ac = new AbortController();
       const kill = setTimeout(() => ac.abort(), 20000);
       try {
-        const r = await fetch(wmsUrl(layer, bbox, W, H, iso, scale), { signal: ac.signal });
+        const r = await fetch(wmsUrl(name, bbox, W, H, iso, scale, layer.style), { signal: ac.signal });
         if (!r.ok) return null;
         return await createImageBitmap(await r.blob());
       } catch { return null; }
@@ -457,8 +472,8 @@ export function createRadar(host, { lat, lon, tz }) {
     // texture, and hinting it for CPU readback pushes it to a software surface
     // on some engines. The echo check below reads a small copy instead.
     const ctx = c.getContext('2d');
-    if (rain) { ctx.drawImage(rain, 0, 0, w, h); rain.close?.(); }
-    if (snow) { ctx.drawImage(snow, 0, 0, w, h); snow.close?.(); }
+    c.loaded = bitmaps.some(Boolean);     // did anything at all arrive?
+    for (const b of bitmaps) if (b) { ctx.drawImage(b, 0, 0, w, h); b.close?.(); }
 
     /* Note whether this frame contains any echo at all. A clear sky renders
        exactly like a broken radar — blank — so the panel needs to be able to
@@ -680,25 +695,39 @@ export function createRadar(host, { lat, lon, tz }) {
     /* ── motion renderer ──
        Holds every frame in GPU memory at once, so the texture budget matters
        more than the last bit of sharpness. */
-    updateLoading(0, total, 'Loading radar');
+    const loadLabel = `Loading ${layer.label.toLowerCase()}`;
+    updateLoading(0, total, loadLabel);
     const scale = Math.min(RES_SCALE(), 1100 / Math.max(W, H));
     const composites = await mapLimit(
       frames, 4,
-      (t) => loadComposite(bbox, t.toISOString().replace(/\.\d+Z$/, 'Z'), Math.max(1, scale)),
-      (n) => updateLoading(n, total, 'Loading radar'),
+      (t) => loadComposite(layer, bbox, t.toISOString().replace(/\.\d+Z$/, 'Z'), Math.max(1, scale)),
+      (n) => updateLoading(n, total, loadLabel),
     );
     if (loadedFor !== myKey) return;            // a pan/zoom superseded this load
+
+    /* Same honesty as the image path: if GeoMet returned nothing for any
+       frame, say the layer is unavailable rather than showing a clear sky. */
+    if (!composites.some((c) => c.loaded)) {
+      frameLayer.classList.remove('reloading');
+      ready = false;
+      updateLoading(1, 1);
+      stamp.innerHTML = `${layer.label} <span class="rd-age">unavailable</span>`;
+      showLayerError(layer);
+      return;
+    }
 
     /* A few stray pixels of echo are invisible at a glance, so treating "not
        exactly zero" as "there is weather here" still leaves you staring at an
        apparently broken map. Anything under a third of a percent of the view
        counts as nothing worth showing. */
     const anyEcho = composites.some((c) => c.echoPct > 0.3);
-    setEmptyNotice(anyEcho);
+    // the empty notice is about precipitation; a clear smoke forecast is good news
+    setEmptyNotice(layer.timeMode === 'future' ? true : anyEcho);
 
     if (useFlow && flowR) {
       try {
         updateLoading(0, 1, 'Tracking motion');
+        flowR.setOpacity(layer.opacity ?? 0.9);
         const committed = await flowR.build(
           composites,
           (p) => updateLoading(p, 1, 'Tracking motion'),
@@ -710,10 +739,18 @@ export function createRadar(host, { lat, lon, tz }) {
            On some devices WebGL yields a blank canvas with no error at all, and
            the radar then looks broken while the plain-image card beside it works
            fine. Rather than diagnose every cause, check the result and switch
-           to images if it came out empty. */
-        const drawn = flowR.probe(idx);
-        if (anyEcho && drawn === 0) {
+           to images if it came out empty.
+
+           Probe the frame with the MOST echo, not whichever is current. The
+           newest scan is often the one with a cell just leaving the view, and
+           a probe of a near-empty frame reported "nothing drawn" for a GPU
+           that was working perfectly — which switched smooth motion off on
+           every opening, and looked exactly like the setting doing nothing. */
+        const richest = composites.reduce((b, c, i) => (c.echoPct > composites[b].echoPct ? i : b), 0);
+        const drawn = composites[richest].echoPct > 1 ? flowR.probe(richest) : -1;
+        if (drawn === 0) {
           console.warn('WebGL radar produced an empty frame; using images instead');
+          say('Smooth motion drew nothing on this device — showing standard frames');
           useFlow = false;
           glCanvas.remove();
         } else {
@@ -725,6 +762,7 @@ export function createRadar(host, { lat, lon, tz }) {
         }
       } catch (e) {
         console.warn('flow renderer failed, falling back to cross-fade', e);
+        say(`Smooth motion failed (${e?.message ?? e}) — showing standard frames`);
         useFlow = false;
         glCanvas.remove();
       }
@@ -1135,16 +1173,28 @@ export function createRadar(host, { lat, lon, tz }) {
   const ageTimer = setInterval(paintStamp, 30000);
   const pollTimer = setInterval(async () => {
     if (document.hidden || !ready) return;
+    const l = currentLayer();
+    if (!l.animated) return;
     try {
-      const latest = await fetchFrameTimes(FRAMES);
+      /* Ask about the layer that is actually showing. This used to poll the
+         radar's time axis unconditionally, so with smoke on screen a fresh
+         radar scan replaced the smoke's hourly forecast times with six-minute
+         radar times and redrew smoke against them — which GeoMet answers with
+         nothing. That was the "smoke breaks after a while" bug. */
+      const latest = await fetchFrameTimes(l.frames ?? FRAMES, l.wms[0], l.timeMode ?? 'past');
+      if (currentLayer() !== l) return;        // switched layers while waiting
       const newest = latest[latest.length - 1];
       const had = frames[frames.length - 1];
       if (!newest || (had && newest.getTime() <= had.getTime())) return;
 
       const wasAtNewest = idx === frames.length - 1;
+      const wasAtStart = idx === 0;
       frames = latest;
       slider.max = String(frames.length - 1);
-      if (wasAtNewest) idx = frames.length - 1;   // follow the leading edge
+      // follow the leading edge on radar; a forecast loop stays parked at "now"
+      if (l.timeMode === 'future') { if (wasAtStart) idx = 0; }
+      else if (wasAtNewest) idx = frames.length - 1;
+      idx = Math.min(idx, frames.length - 1);
       loadedFor = null;
       await drawFrames();
     } catch { /* transient; the next tick tries again */ }
