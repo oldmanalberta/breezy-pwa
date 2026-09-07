@@ -393,14 +393,15 @@ svg { width: 100%; height: 100%; fill: currentColor; display: block; }
 .mo-key { display: flex; gap: 16px; font-size: 12px; font-weight: 600; margin-bottom: 6px; }
 .mo-key span { display: flex; align-items: center; gap: 6px; }
 .mo-sw { width: 11px; height: 11px; border-radius: 3px; display: inline-block; }
-.mo-col { width: 64px; }
-.mo-col b { font-size: 12px; color: var(--on-surface-var); }
+.mo-col { width: 64px; gap: 1px; }
+.mo-col b { font-size: 12px; color: var(--on-surface-var); margin-bottom: 2px; }
+.mo-col em { font-size: 10.5px; font-weight: 700; white-space: nowrap; letter-spacing: -.01em; }
 /* the chosen year is the subject and takes the accent everywhere — bars,
    curves, legend; this year is the grey comparison behind it */
 .mo-past { fill: var(--accent-ink);     background: var(--accent-ink); }
 .mo-now  { fill: var(--on-surface-var); background: var(--on-surface-var); opacity: .5; }
-.mo-past-txt { fill: currentColor; }
-.mo-now-txt  { fill: var(--on-surface-var); }
+.mo-past-txt { fill: currentColor; color: var(--accent-ink); }
+.mo-now-txt  { fill: var(--on-surface-var); color: var(--on-surface-var); }
 .mo-line-past { stroke: var(--accent-ink); }
 .mo-line-now  { stroke: var(--on-surface-var); opacity: .6; }
 .mo-note { margin: 6px 0 0; font-size: 11px; line-height: 1.45; color: var(--on-surface-var); }
