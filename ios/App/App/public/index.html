@@ -84,7 +84,7 @@
     <button class="pill" id="btn-locate">Use my location</button>
   </div>
   <div id="search-results" class="results"></div>
-  <h3 class="panel-sub">Saved</h3>
+  <h3 class="panel-sub">Saved <span class="panel-hint">· star one to pin the widgets to it</span></h3>
   <div id="saved-list" class="results"></div>
 </aside>
 
@@ -106,6 +106,13 @@
     <div class="seg" id="seg-wind">
       <button data-v="kmh" class="on">km/h</button><button data-v="ms">m/s</button><button data-v="mph">mph</button>
     </div>
+  </div>
+  <div class="setting">
+    <label>Text size</label>
+    <div class="seg" id="seg-textsize">
+      <button data-v="small">Smaller</button><button data-v="normal" class="on">Default</button><button data-v="large">Larger</button>
+    </div>
+    <p class="tiny pad" style="margin-top:8px">The app already follows the phone's Text Size (Settings → Display &amp; Brightness). This nudges it further either way.</p>
   </div>
   <div class="setting">
     <label>Weather source</label>
@@ -140,11 +147,11 @@
     <p class="tiny pad" style="margin-top:8px">Standard shows the raw scans and works everywhere. Smooth motion estimates how precipitation is travelling and fills in the frames between. The radar screen has the same switch in its button stack, so you can flip between them on the spot to tell real movement from estimated movement.</p>
   </div>
   <div class="setting">
-    <label>Radar diagnostics</label>
+    <label>Diagnostics</label>
     <div class="seg" id="seg-radardebug">
       <button data-v="off" class="on">Off</button><button data-v="on">On</button>
     </div>
-    <p class="tiny pad" style="margin-top:8px">Shows a short message at each stage of loading a radar layer — how many time steps, how many frames arrived, whether the GPU drew them. Useful when something on the radar comes up blank.</p>
+    <p class="tiny pad" style="margin-top:8px">Shows a short message at each stage of loading a radar layer, and whenever the forecast is handed to the Home Screen widget. Useful when something comes up blank.</p>
   </div>
   <div class="setting">
     <label>Card order</label>

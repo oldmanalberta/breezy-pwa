@@ -77,7 +77,8 @@ export function hourlyCard(data) {
   const hrs = (data.hourly ?? []).slice(0, 24);
   if (hrs.length < 2) return '';
 
-  const W = 62, H = 62, padT = 20, padB = 10;
+  measure();
+  const W = HOUR_W, H = Math.round(CHART_H * 0.55), padT = Math.round(FS * 1.5), padB = 10;
   const temps = hrs.map((h) => h.temp).filter((t) => t != null);
   if (!temps.length) return '';
   const min = Math.min(...temps), max = Math.max(...temps);
@@ -89,8 +90,8 @@ export function hourlyCard(data) {
                  .filter(Boolean).join(' ');
 
   const labels = hrs.map((h, i) => h.temp == null ? '' :
-    `<text x="${x(i)}" y="${(y(h.temp) - 9).toFixed(1)}" text-anchor="middle"
-       font-size="14" font-weight="600" fill="currentColor">${temp(h.temp)}</text>`).join('');
+    `<text x="${x(i)}" y="${(y(h.temp) - 8).toFixed(1)}" text-anchor="middle"
+       font-size="${FS}" font-weight="600" fill="currentColor">${temp(h.temp)}</text>`).join('');
 
   const cols = hrs.map((h, i) => `
     <div class="hr${i === 0 ? ' now' : ''}">
@@ -119,8 +120,28 @@ export function hourlyCard(data) {
    Weather uses. Every mode reuses one renderer; a mode just declares how to
    pull its numbers out of a day and how to label them. */
 
-const COL = 72;          // px per day column
-const CHART_H = 114;     // px of chart between the day and night icons
+/* Strip geometry, measured rather than fixed: seven day columns fill the
+   card's inner width on whatever phone this is, and every size inside the
+   chart hangs off the root font so the strip tracks Text Size along with
+   the rest of the app. Read once per paint by measure(). */
+let COL = 48;            // px per day column
+let CHART_H = 100;       // px of chart between the day and night icons
+let FS = 13, FSS = 11;   // chart label sizes: values, and the small alt line
+let HOUR_W = 52;         // px per hour column
+
+export function measure() {
+  const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+  // sheet padding 14 + card padding 18, each side (see app.css)
+  const inner = Math.max(240, (document.querySelector('#cards')?.clientWidth || window.innerWidth) - 36);
+  COL = Math.floor(inner / 7);
+  HOUR_W = Math.max(Math.floor(inner / 6.5), Math.round(rem * 3));
+  CHART_H = Math.round(rem * 6.25);
+  FS = Math.round(rem * 0.8 * 10) / 10;
+  FSS = Math.round(rem * 0.66 * 10) / 10;
+  document.documentElement.style.setProperty('--dp-col', `${COL}px`);
+  document.documentElement.style.setProperty('--hr-col', `${HOUR_W}px`);
+  document.documentElement.style.setProperty('--dp-ico', `${Math.min(28, Math.round(COL * 0.56))}px`);
+}
 
 /* `past: true` marks the series that also make sense for days already gone —
    the recorded high and low, how much fell, how hard it blew. Those modes get
@@ -193,7 +214,7 @@ function rangeChart(days, mode, W) {
   if (!vals.length) return '';
   const max = Math.max(...vals), min = Math.min(...vals);
   const span = Math.max(max - min, 1);
-  const padT = 24, padB = 24;
+  const padT = Math.round(FS * 1.7), padB = Math.round(FS * 1.7);
   const y = (v) => padT + (1 - (v - min) / span) * (CHART_H - padT - padB);
   const x = (i) => i * COL + COL / 2;
 
@@ -203,14 +224,14 @@ function rangeChart(days, mode, W) {
     if (!pts) return '';
     const labels = days.map((d, i) => get(d) == null ? '' :
       `<text x="${x(i)}" y="${(y(get(d)) + dy).toFixed(1)}" text-anchor="middle"
-         font-size="13.5" font-weight="600" fill="currentColor">${esc(mode.fmt(get(d)))}</text>`).join('');
+         font-size="${FS}" font-weight="600" fill="currentColor">${esc(mode.fmt(get(d)))}</text>`).join('');
     return `<polyline points="${pts}" fill="none" stroke="var(--accent-ink)" stroke-width="2.5"
               stroke-linecap="round" stroke-linejoin="round" class="${cls}"/>${labels}`;
   };
 
   return `<svg class="dp-chart" width="${W}" height="${CHART_H}" viewBox="0 0 ${W} ${CHART_H}">
-      ${line(mode.hi, 'dp-hi', -9)}
-      ${line(mode.lo, 'dp-lo', 17)}
+      ${line(mode.hi, 'dp-hi', -Math.round(FS * 0.65))}
+      ${line(mode.lo, 'dp-lo', Math.round(FS * 1.25))}
       ${divider(days)}
     </svg>`;
 }
@@ -231,7 +252,7 @@ function barChart(days, mode, W) {
   const vals = days.map(mode.val).filter((v) => v != null);
   if (!vals.length) return '';
   const max = Math.max(...vals, 0.001);
-  const padT = 26, padB = 20, base = CHART_H - padB;
+  const padT = Math.round(FS * 1.9), padB = Math.round(FSS * 1.8), base = CHART_H - padB;
 
   const bars = days.map((d, i) => {
     const v = mode.val(d);
@@ -240,18 +261,19 @@ function barChart(days, mode, W) {
     const cx = i * COL + COL / 2;
     const alt = mode.alt?.(d);
     return `
-      <rect x="${cx - 11}" y="${(base - h).toFixed(1)}" width="22" height="${h.toFixed(1)}"
-            rx="5" fill="${mode.colour}" opacity=".85"/>
-      <text x="${cx}" y="${(base - h - 8).toFixed(1)}" text-anchor="middle"
-            font-size="12.5" font-weight="600" fill="currentColor">${esc(mode.fmt(v))}</text>
-      ${alt != null && alt > 0 ? `<text x="${cx}" y="${base + 14}" text-anchor="middle"
-            font-size="11" font-weight="600" fill="var(--on-surface-var)">${esc(mode.altFmt(alt))}</text>` : ''}`;
+      <rect x="${cx - Math.round(COL * 0.18)}" y="${(base - h).toFixed(1)}" width="${Math.round(COL * 0.36)}" height="${h.toFixed(1)}"
+            rx="4" fill="${mode.colour}" opacity=".85"/>
+      <text x="${cx}" y="${(base - h - 6).toFixed(1)}" text-anchor="middle"
+            font-size="${FSS}" font-weight="600" fill="currentColor">${esc(mode.fmt(v))}</text>
+      ${alt != null && alt > 0 ? `<text x="${cx}" y="${base + FSS + 3}" text-anchor="middle"
+            font-size="${FSS}" font-weight="600" fill="var(--on-surface-var)">${esc(mode.altFmt(alt))}</text>` : ''}`;
   }).join('');
 
   return `<svg class="dp-chart" width="${W}" height="${CHART_H}" viewBox="0 0 ${W} ${CHART_H}">${bars}${divider(days)}</svg>`;
 }
 
 export function dailyCard(data, modeKey = 'conditions') {
+  measure();
   const ahead = (data.daily ?? []).slice(0, 10);
   if (!ahead.length) return '';
 
@@ -274,8 +296,9 @@ export function dailyCard(data, modeKey = 'conditions') {
 
   const heads = days.map((d) => {
     const isToday = d.date && d.date.toDateString() === today;
-    const name = d.label ?? (isToday ? 'Today' : dayLabel(d.date, data.tz));
-    return `<div class="dp-col${d.past ? ' dp-past' : ''}">
+    // seven across means "Thu", not ECCC's "Thursday"; the date line has the rest
+    const name = isToday ? 'Today' : d.date ? dayLabel(d.date, data.tz) : String(d.label ?? '').slice(0, 3);
+    return `<div class="dp-col${d.past ? ' dp-past' : ''}${isToday ? ' dp-today' : ''}">
         <b>${esc(name)}</b>
         <em>${d.date ? dateLabel(d.date, data.tz) : ''}</em>
         <span class="dp-ico" title="${esc(d.text)}">${icon(d.condition, false)}</span>
@@ -353,7 +376,7 @@ export function airCard(data) {
         .join('')}</div>`
     : '';
   const sub = a.station
-    ? `<div class="s" style="margin-top:8px;color:var(--on-surface-var);font-size:12.5px">${esc(a.station)}${a.time ? ` · ${timeLabel(a.time, data.tz)}` : ''}</div>`
+    ? `<div class="s" style="margin-top:8px;color:var(--on-surface-var);font-size:.78rem">${esc(a.station)}${a.time ? ` · ${timeLabel(a.time, data.tz)}` : ''}</div>`
     : '';
 
   /* If the primary reading is Canada's AQHI, show the US AQI beside it. They
@@ -382,7 +405,7 @@ export function airCard(data) {
       <div class="aq-val">${a.index}</div>
       <div>
         <div class="aq-cat">${esc(a.category)}</div>
-        <div class="s" style="font-size:12px;color:var(--on-surface-var)">${isAqhi ? 'Canada AQHI · 1–10+' : 'US AQI'}</div>
+        <div class="s" style="font-size:.75rem;color:var(--on-surface-var)">${isAqhi ? 'Canada AQHI · 1–10+' : 'US AQI'}</div>
       </div>
       <span class="aq-info">${G.ext}</span>
     </a>
@@ -633,6 +656,7 @@ export function sunCard(data) {
    reads the way the week ahead does. Fourteen columns rather than seven, which
    is why it scrolls: today sits in the middle with a week either side. */
 export function historyCard(data, opts = {}) {
+  measure();
   const spans = spansAvailable();
   const pick = spans.includes(opts.historyYears) ? opts.historyYears : spans[0];
   const h = data.history;
@@ -654,7 +678,7 @@ export function historyCard(data, opts = {}) {
   const temps = days.flatMap((d) => [d.hi, d.lo]).filter((v) => v != null);
   const max = Math.max(...temps), min = Math.min(...temps);
   const span = Math.max(max - min, 1);
-  const padT = 24, padB = 24;
+  const padT = Math.round(FS * 1.7), padB = Math.round(FS * 1.7);
   const y = (v) => padT + (1 - (v - min) / span) * (CHART_H - padT - padB);
   const x = (i) => i * COL + COL / 2;
 
@@ -664,7 +688,7 @@ export function historyCard(data, opts = {}) {
     if (!pts) return '';
     const labels = days.map((d, i) => d[key] == null ? '' :
       `<text x="${x(i)}" y="${(y(d[key]) + dy).toFixed(1)}" text-anchor="middle"
-         font-size="13" font-weight="600" fill="currentColor">${esc(temp(d[key]))}</text>`).join('');
+         font-size="${FS}" font-weight="600" fill="currentColor">${esc(temp(d[key]))}</text>`).join('');
     return `<polyline points="${pts}" fill="none" stroke="var(--accent-ink)" stroke-width="2.5"
               stroke-linecap="round" stroke-linejoin="round" class="${cls}"/>${labels}`;
   };
@@ -695,8 +719,8 @@ export function historyCard(data, opts = {}) {
       <div style="width:${W}px">
         <div class="dp-row">${heads}</div>
         <svg class="dp-chart" width="${W}" height="${CHART_H}" viewBox="0 0 ${W} ${CHART_H}">
-          ${line('hi', -9, 'dp-hi')}
-          ${line('lo', 17, 'dp-lo')}
+          ${line('hi', -Math.round(FS * 0.65), 'dp-hi')}
+          ${line('lo', Math.round(FS * 1.25), 'dp-lo')}
         </svg>
         <div class="dp-row hist-feet">${feet}</div>
       </div>

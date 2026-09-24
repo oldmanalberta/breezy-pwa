@@ -8,6 +8,7 @@ import { startFx, stopFx } from './fx.js';
 import { createRadar } from './radar.js';
 import { fetchHistory } from './sources/history.js';
 import { renderCards, alertsMarkup, temp, timeLabel, CARDS, DEFAULT_ORDER, normalizeOrder } from './render.js';
+import { publishWidget } from './native.js';
 
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => Array.from(document.querySelectorAll(s));
@@ -275,6 +276,35 @@ function paint(data, place, stale = false) {
   $('#source-line').textContent = `Data from ${srcBits.join(' ')}`;
 
   startFx($('#fx'), fxKind(c.condition), state.fx === 'on');
+
+  /* The Home Screen widget shows the starred location, or whatever the app
+     last painted when nothing is starred. */
+  if (!stale && (!state.widgetPlaceId || state.widgetPlaceId === place.id)) publishWidget(data, place);
+}
+
+/* Keep a starred location's widget current even while a different location is
+   open in the app: reuse its cached forecast when that is under half an hour
+   old, otherwise fetch it quietly. Never touches what is on screen. */
+/* Runs on the same 15-minute clock as the app's own refresh, and only when the
+   starred place's forecast is older than that — so pinning a location costs
+   one extra fetch per refresh cycle, never one per swipe. */
+let widgetBusy = false;
+async function refreshWidgetPlace(force = false) {
+  const id = state.widgetPlaceId;
+  if (!id) { if (current) publishWidget(current, activePlace(), { force }); return; }
+  const place = state.places.find((p) => p.id === id);
+  if (!place || widgetBusy) return;
+  if (current && activePlace()?.id === id) { publishWidget(current, place, { force }); return; }
+  const cached = readCache(id, 15 * 60e3);
+  if (cached && !force) { publishWidget(cached.data, place); return; }
+  if (cached && force) { publishWidget(cached.data, place, { force: true }); return; }
+  widgetBusy = true;
+  try {
+    const data = await loadWeather(place, state.source);
+    cacheWeather(id, data);
+    publishWidget(data, place);
+  } catch (e) { console.warn('widget place refresh failed', e); }
+  finally { widgetBusy = false; }
 }
 
 function skeleton(place) {
@@ -338,10 +368,14 @@ function renderSaved() {
     const wx = readCache(p.id, 24 * 3600e3);
     const t = wx?.data?.current?.temp;
     const active = p.id === state.activeId;
+    const starred = p.id === state.widgetPlaceId;
     return `<div class="res${active ? ' active' : ''}" data-place="${p.id}">
       <span class="flag">${p.current ? '📍' : flagOf(p.cc)}</span>
       <span class="rn"><b>${p.name}</b><span>${p.admin ?? ''}</span></span>
       <span class="rt">${t != null ? temp(t) : ''}</span>
+      <button class="star${starred ? ' on' : ''}" data-star="${p.id}" aria-label="${starred ? 'Widget follows this location' : 'Show this location on the widget'}" title="Widget location">
+        <svg viewBox="0 0 24 24"><path d="m12 2.6 2.9 6 6.6.9-4.8 4.6 1.2 6.5L12 17.5l-5.9 3.1 1.2-6.5L2.5 9.5l6.6-.9z"/></svg>
+      </button>
       <button class="del" data-del="${p.id}" aria-label="Delete ${p.name}" title="Delete">
         <svg viewBox="0 0 24 24"><path d="M6 19a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7H6zM19 4h-3.5l-1-1h-5l-1 1H5v2h14z"/></svg>
       </button>
@@ -450,6 +484,18 @@ function wire() {
   });
 
   $('#saved-list').addEventListener('click', (e) => {
+    const star = e.target.closest('[data-star]');
+    if (star) {
+      e.stopPropagation();
+      const id = star.dataset.star;
+      const was = state.widgetPlaceId === id;
+      set('widgetPlaceId', was ? null : id);
+      renderSaved();
+      const name = state.places.find((p) => p.id === id)?.name ?? 'location';
+      toast(was ? 'Widgets follow whichever location is open' : `Widgets pinned to ${name}`);
+      refreshWidgetPlace(true);
+      return;
+    }
     const del = e.target.closest('[data-del]');
     if (del) {
       e.stopPropagation();
@@ -513,6 +559,7 @@ function wire() {
         && !e.target.closest('#alert-banner')) closeAlerts();
   });
   $('#radar').addEventListener('radar-toast', (e) => toast(e.detail));
+  window.addEventListener('breezy-toast', (e) => toast(e.detail, 4000));
 
   // route the close button through history so it matches the back gesture
   $('#radar').addEventListener('radar-close', () => {
@@ -539,6 +586,7 @@ function wire() {
   seg('#seg-maptheme', 'mapTheme', () => { if (current) paint(current, activePlace()); });
   seg('#seg-radarrender', 'radarRender');
   seg('#seg-radardebug', 'radarDebug');
+  seg('#seg-textsize', 'textSize', applyTextScale);
 
   renderOrder();
   $('#order-list').addEventListener('click', (e) => {
@@ -557,7 +605,7 @@ function wire() {
 
   // refresh when the app comes back to the foreground
   document.addEventListener('visibilitychange', () => {
-    if (!document.hidden && current && Date.now() - current.updated > 10 * 60e3) refresh({ silent: true });
+    if (!document.hidden && current && Date.now() - current.updated > 10 * 60e3) { refresh({ silent: true }); refreshWidgetPlace(); }
   });
 
   /* Horizontal swipe on the hero pages between saved locations.
@@ -623,6 +671,57 @@ function wire() {
   }
 }
 
+/* ── keyboard-aware viewport ──────────────────────── */
+/* visualViewport is the only thing that knows where the keyboard is. Publish
+   its geometry as CSS variables so fixed sheets can sit above the keys rather
+   than under them. Also undo the page scroll iOS performs to reveal a focused
+   field, since the sheet is what should move, not the page behind it. */
+function trackViewport() {
+  const vv = window.visualViewport;
+  if (!vv) return;
+  const apply = () => {
+    const kb = Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop));
+    const root = document.documentElement.style;
+    root.setProperty('--kb', `${kb}px`);
+    root.setProperty('--vv-h', `${Math.round(vv.height)}px`);
+    document.body.classList.toggle('kb-open', kb > 60);
+    if (kb > 60 && document.querySelector('.panel.on') && window.scrollY !== 0 && document.body.style.overflow === 'hidden') {
+      window.scrollTo(0, 0);
+    }
+  };
+  vv.addEventListener('resize', apply);
+  vv.addEventListener('scroll', apply);
+  apply();
+}
+
+/* ── text size ────────────────────────────────────── */
+/* Follow the phone's Text Size. WebKit exposes Dynamic Type through the
+   -apple-system-body font: at the default ("Large") setting it resolves to
+   17px, at the smallest to 14px, at the largest accessibility size to 53px.
+   Measuring it gives the factor the user asked for, which then scales the
+   root font every rem in the stylesheet hangs off. Other browsers resolve
+   the keyword to nothing useful and get a factor of 1. */
+const TEXT_SIZES = { small: 0.88, normal: 1, large: 1.12 };
+
+function dynamicTypeFactor() {
+  try {
+    const probe = document.createElement('span');
+    probe.style.cssText = 'position:absolute;visibility:hidden;font:-apple-system-body';
+    probe.textContent = 'x';
+    document.body.appendChild(probe);
+    const px = parseFloat(getComputedStyle(probe).fontSize);
+    probe.remove();
+    if (!px || px < 8 || px > 80) return 1;
+    // clamp: the largest accessibility sizes would push the hero off screen
+    return Math.min(1.6, Math.max(0.75, px / 17));
+  } catch { return 1; }
+}
+
+function applyTextScale() {
+  const f = dynamicTypeFactor() * (TEXT_SIZES[state.textSize] ?? 1);
+  document.documentElement.style.setProperty('--text-scale', f.toFixed(3));
+}
+
 /* ── boot ─────────────────────────────────────────── */
 async function boot() {
   /* The daily panel's series persists while the app is open, since flipping
@@ -632,13 +731,19 @@ async function boot() {
      you. Same reasoning as the radar opening on precipitation. */
   if (state.dailyMode !== 'conditions') set('dailyMode', 'conditions');
 
+  applyTextScale();
+  trackViewport();
+  // iOS re-resolves system fonts when Text Size changes; re-measure on return
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) applyTextScale(); });
+
   wire();
   renderSaved();
 
   if (!state.places.length) showEmpty();
   else refresh();
 
-  setInterval(() => { if (!document.hidden) refresh({ silent: true }); }, 15 * 60e3);
+  setInterval(() => { if (!document.hidden) { refresh({ silent: true }); refreshWidgetPlace(); } }, 15 * 60e3);
+  refreshWidgetPlace();
 
   if ('serviceWorker' in navigator) {
     try {

@@ -42,3 +42,67 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         return config
     }
 }
+
+// MARK: - Widget bridge
+//
+// The web app publishes a compact forecast snapshot every time it paints; the
+// widget extension reads it from the shared App Group container. Kept in this
+// file rather than its own because the Capacitor project's App target is a
+// plain Xcode group — a new file would need adding to the project by hand.
+
+import WidgetKit
+
+enum BreezyAppGroup {
+    static let id = "group.ca.oldmanalberta.breezy"
+    static let forecastKey = "forecast"
+}
+
+@objc(WidgetBridgePlugin)
+public class WidgetBridgePlugin: CAPPlugin, CAPBridgedPlugin {
+    public let identifier = "WidgetBridgePlugin"
+    public let jsName = "WidgetBridge"
+    public let pluginMethods: [CAPPluginMethod] = [
+        CAPPluginMethod(name: "publish", returnType: CAPPluginReturnPromise),
+    ]
+
+    @objc func publish(_ call: CAPPluginCall) {
+        guard let json = call.getString("json") else {
+            call.reject("json missing")
+            return
+        }
+        guard let defaults = UserDefaults(suiteName: BreezyAppGroup.id) else {
+            // App Group not configured on this build; the widget simply stays empty
+            call.resolve(["stored": false])
+            return
+        }
+        defaults.set(json, forKey: BreezyAppGroup.forecastKey)
+        WidgetCenter.shared.reloadAllTimelines()
+        call.resolve(["stored": true])
+    }
+}
+
+/// The storyboard's root view controller. Registers the local plugin once the
+/// bridge exists — Capacitor only auto-discovers plugins that ship as packages.
+class BreezyViewController: CAPBridgeViewController {
+    private var registered = false
+
+    private func registerBreezyPlugins(from stage: String) {
+        guard let bridge = bridge else {
+            print("Breezy: \(stage) — bridge not ready yet")
+            return
+        }
+        if registered { return }
+        registered = true
+        bridge.registerPluginInstance(WidgetBridgePlugin())
+        print("Breezy: WidgetBridge registered from \(stage)")
+    }
+
+    override open func capacitorDidLoad() {
+        registerBreezyPlugins(from: "capacitorDidLoad")
+    }
+
+    override open func viewDidLoad() {
+        super.viewDidLoad()
+        registerBreezyPlugins(from: "viewDidLoad")
+    }
+}

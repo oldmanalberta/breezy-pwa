@@ -5,6 +5,7 @@ const KEY = 'breezy.v1';
 
 const DEFAULTS = {
   unit: 'C',
+  textSize: 'normal',     // small | normal | large, on top of the phone's Text Size
   wind: 'kmh',
   source: 'auto',
   fx: 'on',
@@ -23,6 +24,7 @@ const DEFAULTS = {
   historyYears: 1,         // how far back the historical card looks
   order: null,             // card order; null means the default arrangement
   places: [],              // [{id,name,admin,cc,lat,lon,tz,current?:bool}]
+  widgetPlaceId: null,     // starred location the widgets show; null follows whichever is open
   activeId: null,
 };
 
@@ -50,6 +52,7 @@ export function addPlace(p) {
 export function removePlace(id) {
   state.places = state.places.filter((p) => p.id !== id);
   if (state.activeId === id) state.activeId = state.places[0]?.id ?? null;
+  if (state.widgetPlaceId === id) state.widgetPlaceId = null;
   save();
 }
 

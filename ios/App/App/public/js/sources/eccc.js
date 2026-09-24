@@ -61,6 +61,24 @@ const popFromText = (s) => {
   return m ? Math.min(100, Number(m[1])) : null;
 };
 
+/* ── feels-like, ECCC's own definitions ──────────────
+   Wind chill (the 2001 JAG/TI index, in °C and km/h) applies at 10 °C or
+   below with wind of at least 5 km/h; humidex applies from 20 °C up and is
+   built from the dew point. Either is only worth reporting when it differs
+   from the air temperature by a degree or more. */
+export function windChillOf(t, v) {
+  if (t === null || v === null || t > 10 || v < 5) return null;
+  const w = 13.12 + 0.6215 * t - 11.37 * v ** 0.16 + 0.3965 * t * v ** 0.16;
+  return w <= t - 1 ? Math.round(w) : null;
+}
+
+export function humidexOf(t, dew) {
+  if (t === null || dew === null || t < 20) return null;
+  const e = 6.11 * Math.exp(5417.753 * (1 / 273.16 - 1 / (dew + 273.15)));
+  const h = t + 0.5555 * (e - 10);
+  return h >= t + 1 ? Math.round(h) : null;
+}
+
 /* ── daily forecasts: ECCC emits alternating day/night blocks ── */
 function buildDaily(forecasts, issued, tz) {
   const days = [];
@@ -200,17 +218,26 @@ export async function fetchEccc({ lat, lon, tz }) {
 
   const daily = buildDaily(p.forecastGroup?.forecasts, V(p.forecastGroup?.timestamp) || p.lastUpdated, tz);
 
-  /* ECCC leaves the previous season's windChill/humidex sitting in the feed
-     long after it stops applying — a -2 wind chill turns up on a 30 °C August
-     afternoon. Only trust each one inside the range it's defined for. */
+  /* ECCC leaves stale windChill/humidex values sitting in the feed — a -2
+     wind chill on a 30 °C August afternoon, or a -1 on a 9 °C morning that
+     could only have been true hours earlier. So compute both from the actual
+     observation with the same formulas ECCC uses, and take their number only
+     when it agrees with the computed one to within a couple of degrees. */
   const tNow = N(cc.temperature);
-  const windChill = N(cc.windChill);
-  const humidex = N(cc.humidex);
+  const wind = N(cc.wind?.speed);
+  const dew = N(cc.dewpoint);
+  const calcChill = windChillOf(tNow, wind);
+  const calcHumidex = humidexOf(tNow, dew);
+  const near = (a, b) => a !== null && b !== null && Math.abs(a - b) <= 2;
+  const fed = { chill: N(cc.windChill), humidex: N(cc.humidex) };
+
   let feelsLike = null, feelsLabel = 'Feels like';
-  if (windChill !== null && tNow !== null && tNow <= 10 && windChill < tNow) {
-    feelsLike = windChill; feelsLabel = 'Wind chill';
-  } else if (humidex !== null && tNow !== null && tNow >= 20 && humidex > tNow) {
-    feelsLike = humidex; feelsLabel = 'Humidex';
+  if (calcChill !== null) {
+    feelsLike = near(fed.chill, calcChill) ? fed.chill : calcChill;
+    feelsLabel = 'Wind chill';
+  } else if (calcHumidex !== null) {
+    feelsLike = near(fed.humidex, calcHumidex) ? fed.humidex : calcHumidex;
+    feelsLabel = 'Humidex';
   }
 
   const normals = p.forecastGroup?.regionalNormals?.temperature ?? [];

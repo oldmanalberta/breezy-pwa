@@ -153,6 +153,24 @@ developer certificate: Settings → General → VPN & Device Management → your
 Apple ID → Trust. With a free Apple ID the build expires after 7 days and needs
 re-running from Xcode; a paid developer account lifts that.
 
+### Home Screen and Lock Screen widgets
+
+The native build ships a WidgetKit extension: a **Forecast** widget (small,
+medium, large), an **Hourly** widget (medium, large) and Lock Screen
+**Conditions** widgets (circular, rectangular, inline). Widgets cannot run the
+web app, so the app publishes a compact snapshot of the forecast every time it
+paints (`js/native.js`) through a small Capacitor plugin (`WidgetBridge`, in
+`AppDelegate.swift`) into a shared App Group, and the extension draws from
+that. Open the app to refresh the widgets; the hourly strip rolls forward on
+its own between launches.
+
+The extension's sources live in `ios/widget-src/`. Because the widget target is
+created by Xcode (File → New → Target → Widget Extension, named
+`BreezyWidget`, with Live Activity and Configuration App Intent unticked), the
+files are copied from there into `ios/App/BreezyWidget/` over the template
+ones. Both the App target and the extension need the **App Groups** capability
+with the group `group.ca.oldmanalberta.breezy`.
+
 ### Updating the web side
 
 After editing the web files, re-sync them into the native project (needs Node):
