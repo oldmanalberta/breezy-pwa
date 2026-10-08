@@ -3,7 +3,7 @@
 import { state, set, save, addPlace, removePlace, activePlace, cacheWeather, readCache } from './store.js';
 import { loadWeather } from './sources/index.js';
 import { geocode, flagOf } from './sources/openmeteo.js';
-import { icon, sky, fxKind, TINTS, PALETTES, accentFor, paletteInks } from './icons.js';
+import { icon, sky, fxKind, TINTS, PALETTES, accentFor, paletteRoles } from './icons.js';
 import { startFx, stopFx } from './fx.js';
 import { createRadar } from './radar.js';
 import { fetchHistory } from './sources/history.js';
@@ -275,32 +275,40 @@ function applyAccent() {
   applyPaletteCards();
 }
 
-/* With a palette chosen, each card takes the next colour of the palette in
-   turn (the weather's pick leads), and the Details tiles cycle through it
-   too. Everything inside a card that uses the accent (its heading, chart
-   lines, bars, verdicts) follows, and the card gets a faint wash of its
-   colour. Written as a small stylesheet so it costs nothing per paint. */
+/* With a palette chosen, each colour has one job everywhere: a wash on the
+   cards, highs and lows (their lines and their numbers), and a calm, medium
+   and risky colour for the status words and percentages. The CSS reads
+   these as variables with the accent as the fallback, so without a palette
+   nothing changes. Written as a small stylesheet so both modes are covered. */
+const ROLE_VARS = { hiLine: '--hi-line', hiText: '--hi-text', loLine: '--lo-line', loText: '--lo-text', calm: '--calm', mid: '--mid', risk: '--risk' };
 function applyPaletteCards() {
-  const c = current?.current ?? {};
-  const inks = paletteInks(state.accent, c.condition, c.night);
+  const r = paletteRoles(state.accent);
   let el = document.getElementById('pal-style');
-  if (!inks) { if (el) el.textContent = ''; return; }
+  if (!r) { if (el) el.textContent = ''; return; }
   if (!el) { el = document.createElement('style'); el.id = 'pal-style'; document.head.append(el); }
-  const n = inks.length;
-  const vars = inks.map((p, i) => `--p${i}:${p.dark};--p${i}-l:${p.light};`).join('');
-  const rule = (sel, i, light) => `${sel}:nth-child(${n}n+${i + 1}){--accent:var(--p${i});--accent-ink:var(--p${i}${light ? '-l' : ''});}`;
-  const block = (light) => inks.map((_, i) => rule('#cards > .card', i, light) + rule('#cards .tile', (i + 2) % n, light)).join('');
-  el.textContent = `:root{${vars}}${block(false)}
-#cards > .card{background:color-mix(in srgb,var(--accent) 6%,var(--surface));}
-@media (prefers-color-scheme: light){${block(true)}
-#cards > .card{background:color-mix(in srgb,var(--accent-ink) 4%,var(--surface));}}`;
+  const vars = (mode) => Object.entries(ROLE_VARS).map(([k, v]) => `${v}:${r[k][mode]};`).join('');
+  el.textContent = `:root{${vars('dark')}--pal-card:${r.card};--lo-op:.9;}
+@media (prefers-color-scheme: light){:root{${vars('light')}}}
+#cards > .card{background:color-mix(in srgb,var(--pal-card) 9%,var(--surface));}
+#cards .tile{background:color-mix(in srgb,var(--pal-card) 16%,var(--surface-2));}
+#cards .tile.warn{background:color-mix(in srgb,var(--risk) 16%,var(--surface-2));}`;
+}
+
+/* The palette's sky colour, deepened so white text still reads, blended
+   into the weather's own gradient: strongest at the top, fading out. */
+function paletteSky(g) {
+  const r = paletteRoles(state.accent);
+  if (!r) return g;
+  const tone = mixHex(r.sky, '#0b1530', 0.35);
+  return g.map((c, i) => mixHex(c, tone, [0.55, 0.42, 0.3][i]));
 }
 
 function paint(data, place, stale = false) {
   current = data;
   const c = data.current;
 
-  const { g, accent } = sky(c.condition, c.night);
+  const { g: weatherSky, accent } = sky(c.condition, c.night);
+  const g = paletteSky(weatherSky);
   const root = document.documentElement.style;
   root.setProperty('--sky-1', g[0]);
   root.setProperty('--sky-2', g[1]);
@@ -312,7 +320,15 @@ function paint(data, place, stale = false) {
   $('#place-name').textContent = place.name;
   const bits = [];
   if (data.place && data.place !== place.name) bits.push(data.place);
-  bits.push(stale ? `Offline · ${timeLabel(data.updated, place.tz)}` : `Updated ${timeLabel(data.updated, place.tz)}`);
+  /* ECCC stamps its data with when it was issued, which only moves when ECCC
+     publishes (roughly hourly), so a successful refresh could look like it
+     did nothing. Show when the app last checked, and the issue time beside it
+     when that is meaningfully older. */
+  const checked = data.checked ? new Date(data.checked) : null;
+  const issued = data.updated ? new Date(data.updated) : null;
+  if (stale) bits.push(`Offline · ${timeLabel(issued, place.tz)}`);
+  else if (checked && issued && checked - issued > 5 * 60e3) bits.push(`Checked ${timeLabel(checked, place.tz)} · ${data.source?.short ?? 'data'} from ${timeLabel(issued, place.tz)}`);
+  else bits.push(`Updated ${timeLabel(checked ?? issued, place.tz)}`);
   $('#place-sub').textContent = bits.join(' · ');
 
   renderDots();
@@ -407,6 +423,7 @@ async function refresh({ silent = false, force = false } = {}) {
     const data = await loadWeather(place, state.source);
     cacheWeather(place.id, data);
     paint(data, place, false);
+    return true;
   } catch (e) {
     console.error(e);
     if (cached) {
@@ -696,7 +713,7 @@ function wire() {
 
   // refresh when the app comes back to the foreground
   document.addEventListener('visibilitychange', () => {
-    if (!document.hidden && current && Date.now() - current.updated > 10 * 60e3) { refresh({ silent: true }); refreshWidgetPlace(); }
+    if (!document.hidden && current && Date.now() - (current.checked ?? current.updated) > 10 * 60e3) { refresh({ silent: true }); refreshWidgetPlace(); }
   });
 
   /* Horizontal swipe on the hero pages between saved locations.
@@ -758,7 +775,7 @@ function wire() {
     if (busy) return;
     lastPull = Date.now();
     toast('Updating forecast…', 1400);
-    refresh({ silent: true, force: true });
+    refresh({ silent: true, force: true }).then((ok) => { if (ok) toast('Forecast up to date', 1400); });
   }
 }
 

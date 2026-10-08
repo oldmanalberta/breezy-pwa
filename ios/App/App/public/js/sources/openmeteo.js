@@ -28,8 +28,14 @@ const CURRENT = [
   'weather_code', 'surface_pressure', 'wind_speed_10m', 'wind_direction_10m', 'wind_gusts_10m',
 ].join(',');
 
+/* Give up on a request that stalls instead of waiting forever: a hung fetch
+   used to hold the app's refresh lock, so pulling to refresh did nothing.
+   no-store so a refresh never gets a copy from the HTTP cache. */
+const timeout = (ms) => (AbortSignal.timeout ? AbortSignal.timeout(ms)
+  : (() => { const c = new AbortController(); setTimeout(() => c.abort(), ms); return c.signal; })());
+
 const j = async (url) => {
-  const r = await fetch(url);
+  const r = await fetch(url, { cache: 'no-store', signal: timeout(15000) });
   if (!r.ok) throw new Error(`Open-Meteo ${r.status}`);
   const d = await r.json();
   if (d.error) throw new Error(d.reason || 'Open-Meteo error');

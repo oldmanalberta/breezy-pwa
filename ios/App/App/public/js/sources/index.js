@@ -95,10 +95,12 @@ export async function loadWeather(loc, pref = 'auto') {
           data.past = om.past;
           data.supplement = 'Open-Meteo';
         } catch { /* ECCC alone is fine */ }
+        data.checked = new Date();
         return data;
       }
-      if (id === 'gem') return await fetchOpenMeteo({ ...arg, model: 'gem_seamless' });
-      return await fetchOpenMeteo(arg);
+      const om = await fetchOpenMeteo(id === 'gem' ? { ...arg, model: 'gem_seamless' } : arg);
+      om.checked = new Date();   // when the app last fetched, as opposed to when the data was issued
+      return om;
     } catch (e) {
       lastErr = e;
     }

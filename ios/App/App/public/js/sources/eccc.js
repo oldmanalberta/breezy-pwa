@@ -21,8 +21,14 @@ const N = (o) => {
   return Number.isFinite(n) ? n : null;
 };
 
+/* Give up on a request that stalls instead of waiting forever: a hung fetch
+   used to hold the app's refresh lock, so pulling to refresh did nothing.
+   no-store so a refresh never gets a copy from the HTTP cache. */
+const timeout = (ms) => (AbortSignal.timeout ? AbortSignal.timeout(ms)
+  : (() => { const c = new AbortController(); setTimeout(() => c.abort(), ms); return c.signal; })());
+
 const j = async (url) => {
-  const r = await fetch(url, { headers: { Accept: 'application/json' } });
+  const r = await fetch(url, { headers: { Accept: 'application/json' }, cache: 'no-store', signal: timeout(15000) });
   if (!r.ok) throw new Error(`ECCC ${r.status} on ${url.split('/collections/')[1] ?? url}`);
   return r.json();
 };

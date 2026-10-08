@@ -92,6 +92,13 @@ body {
 svg { width: 100%; height: 100%; fill: currentColor; display: block; }
 
 /* ── animated sky ─────────────────────────────────── */
+/* Registered as colours so the sky gradient can animate between conditions
+   (a plain custom property, or a gradient, would jump). */
+@property --sky-1 { syntax: '<color>'; inherits: true; initial-value: #3B76BE; }
+@property --sky-2 { syntax: '<color>'; inherits: true; initial-value: #6A9CCF; }
+@property --sky-3 { syntax: '<color>'; inherits: true; initial-value: #A6C4DE; }
+:root { transition: --sky-1 1.6s ease, --sky-2 1.6s ease, --sky-3 1.6s ease; }
+
 .sky {
   position: fixed; inset: 0;
   background: linear-gradient(170deg, var(--sky-1) 0%, var(--sky-2) 46%, var(--sky-3) 100%);
@@ -355,7 +362,7 @@ svg { width: 100%; height: 100%; fill: currentColor; display: block; }
 }
 .hr .i { width: var(--dp-ico, 26px); height: var(--dp-ico, 26px); color: var(--on-surface-var); }
 .hr .h { font-size: 0.75rem; color: var(--on-surface-var); font-weight: 500; }
-.hr .p { font-size: 0.6875rem; color: var(--accent-ink); font-weight: 600; min-height: 15px; }
+.hr .p { font-size: 0.6875rem; color: var(--calm, var(--accent-ink)); font-weight: 600; min-height: 15px; }
 .hr.now .h { color: var(--accent-ink); font-weight: 700; }
 .spark { display: block; margin: 2px 0 -2px; }
 
@@ -411,7 +418,7 @@ svg { width: 100%; height: 100%; fill: currentColor; display: block; }
 }
 .dp-ico { width: var(--dp-ico, 26px); height: var(--dp-ico, 26px); margin-top: 1px; color: var(--on-surface-var); }
 .dp-ico.dim { opacity: .72; }
-.dp-pop { font-size: 0.68rem; font-weight: 700; color: var(--accent-ink); min-height: 1em; }
+.dp-pop { font-size: 0.68rem; font-weight: 700; color: var(--calm, var(--accent-ink)); min-height: 1em; }
 .dp-chart { display: block; color: var(--on-surface); }
 
 /* historical: today's column marked, rainfall as a small bar under the curves */
@@ -444,7 +451,15 @@ svg { width: 100%; height: 100%; fill: currentColor; display: block; }
 .mo-line-now  { stroke: var(--accent-ink); }
 .mo-line-past { stroke: var(--on-surface-var); opacity: .6; }
 .mo-note { margin: 6px 0 0; font-size: 0.6875rem; line-height: 1.45; color: var(--on-surface-var); }
-.dp-chart .dp-lo { opacity: .55; }
+/* highs and lows: lines and numbers each have their own colour under a
+   palette; without one they fall back to the accent and the text colour */
+.dp-chart .dp-hi { stroke: var(--hi-line, var(--accent-ink)); }
+.dp-chart .dp-lo { stroke: var(--lo-line, var(--accent-ink)); opacity: var(--lo-op, .55); }
+.dp-chart .dp-hi-t { fill: var(--hi-text, currentColor); }
+.dp-chart .dp-lo-t { fill: var(--lo-text, currentColor); }
+/* calm / medium / risky: chance of rain in the hourly and daily strips */
+.hr .p.lv1, .dp-pop.lv1 { color: var(--mid, var(--accent-ink)); }
+.hr .p.lv2, .dp-pop.lv2 { color: var(--risk, var(--accent-ink)); }
 
 /* daily */
 .day-row {
@@ -478,11 +493,12 @@ svg { width: 100%; height: 100%; fill: currentColor; display: block; }
 .tile .k { font-size: 0.8438rem; font-weight: 700; margin-bottom: 3px; }
 .tile .v { font-size: 1.5rem; font-weight: 300; letter-spacing: -.02em; line-height: 1.15; }
 .tile .s { font-size: 0.75rem; color: var(--on-surface-var); margin-top: 2px; }
-.tile .h { font-size: 0.8125rem; font-weight: 600; line-height: 1.25; margin-top: 7px; color: var(--accent-ink); }
+.tile .h { font-size: 0.8125rem; font-weight: 600; line-height: 1.25; margin-top: 7px; color: var(--calm, var(--accent-ink)); }
+.tile.mid .h { color: var(--mid, var(--accent-ink)); }
 .tile .n { font-size: 0.6875rem; line-height: 1.35; margin-top: 3px; color: var(--on-surface-var); }
 .tile.warn { background: color-mix(in srgb, #e8a33d 12%, var(--surface-2)); }
-.tile.warn .h { color: #e8a33d; }
-@media (prefers-color-scheme: light) { .tile.warn .h { color: #a35a00; } }
+.tile.warn .h { color: var(--risk, #e8a33d); }
+@media (prefers-color-scheme: light) { .tile.warn .h { color: var(--risk, #a35a00); } }
 
 /* air quality */
 .aq-head {

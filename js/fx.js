@@ -5,6 +5,11 @@ let raf = null, canvas = null, ctx = null;
 let parts = [], kind = 'clouds', W = 0, H = 0, dpr = 1;
 let running = false;
 let opts = {}, extras = [];
+/* Cross-fade: when the weather changes, the outgoing scene keeps moving and
+   fades out while the new one fades in, rather than one replacing the other
+   in a single frame. M is the opacity every draw call is multiplied by. */
+const FADE_S = 1.6;
+let fading = null, fadeT = 0, M = 1, sig = '';
 
 const rand = (a, b) => a + Math.random() * (b - a);
 
@@ -48,7 +53,7 @@ function seed() {
 }
 
 function blob(p) {
-  ctx.globalAlpha = p.o;
+  ctx.globalAlpha = (p.o) * M;
   ctx.fillStyle = '#fff';
   ctx.beginPath();
   ctx.ellipse(p.x + p.w / 2, p.y, p.w / 2, p.h / 2, 0, 0, Math.PI * 2);
@@ -102,7 +107,7 @@ const LEAVES = (palette, n, big) => ({
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.translate(p.x, p.y); ctx.rotate(p.rot);
       ctx.scale(1, .55 + .45 * Math.abs(Math.cos(p.sw)));   // tumbling
-      ctx.globalAlpha = .85; ctx.fillStyle = p.c;
+      ctx.globalAlpha = (.85) * M; ctx.fillStyle = p.c;
       leafShape(6 * p.s, 4.2 * p.s);
     }
   },
@@ -135,7 +140,7 @@ const BUTTERFLY = {
     if (p.x > W + 30) { p.x = -30; p.y = rand(H * .15, H * .4); p.t = rand(8, 18); }
     ctx.translate(p.x, p.y);
     const k = .35 + .65 * Math.abs(Math.sin(p.f));     // wing beat
-    ctx.globalAlpha = .9; ctx.fillStyle = p.c;
+    ctx.globalAlpha = (.9) * M; ctx.fillStyle = p.c;
     for (const side of [-1, 1]) {
       ctx.beginPath(); ctx.ellipse(side * 4.5 * k, -2.5, 4.5 * k, 4, side * .5, 0, 6.28); ctx.fill();
       ctx.beginPath(); ctx.ellipse(side * 3.2 * k, 3, 3.2 * k, 2.6, -side * .4, 0, 6.28); ctx.fill();
@@ -216,7 +221,7 @@ const SPARKLE = {
       if (p.y > H * .6) { p.y = 0; p.x = rand(0, W); }
       const o = Math.max(0, Math.sin(p.ph)) ** 6;
       if (o < .05) continue;
-      ctx.globalAlpha = o;
+      ctx.globalAlpha = (o) * M;
       ctx.fillRect(p.x - 2.5, p.y - .4, 5, .8); ctx.fillRect(p.x - .4, p.y - 2.5, .8, 5);
     }
   },
@@ -230,18 +235,19 @@ function pickExtras() {
   const m = north ? o.month : ((o.month + 5) % 12) + 1;          // southern seasons flip
   const season = m >= 3 && m <= 5 ? 'spring' : m >= 6 && m <= 8 ? 'summer' : m >= 9 && m <= 11 ? 'fall' : 'winter';
   const wet = kind === 'rain' || kind === 'snow';
+  const tag = (id, e) => ({ ...e, id });
   const t = o.temp ?? 10;
   const clearish = ['clear', 'mainlyclear', 'partly'].includes(o.condition);
 
-  if (/thunder|hail/.test(o.condition || '')) out.push(LIGHTNING);
-  if (o.night && (o.aurora ?? 0) >= 25 && !['overcast', 'cloudy', 'fog'].includes(o.condition) && !wet) out.push(AURORA(Math.min(1, o.aurora / 70)));
-  if (o.night && kind === 'stars') out.push(SHOOTING);
+  if (/thunder|hail/.test(o.condition || '')) out.push(tag('lightning', LIGHTNING));
+  if (o.night && (o.aurora ?? 0) >= 25 && !['overcast', 'cloudy', 'fog'].includes(o.condition) && !wet) out.push(tag(`aurora${Math.round(Math.min(1, o.aurora / 70) * 3)}`, AURORA(Math.min(1, o.aurora / 70))));
+  if (o.night && kind === 'stars') out.push(tag('shooting', SHOOTING));
   if (!wet) {
-    if (season === 'fall' && t < 16) out.push(LEAVES(FALL, 14, 1.7));
-    else if (season === 'spring' && t > 4 && !o.night) out.push(LEAVES(SPRING, 14, 1.2));
-    else if (season === 'summer' && o.night && t > 14) out.push(FIREFLIES);
-    else if (season === 'summer' && !o.night && t > 16 && clearish) out.push(BUTTERFLY);
-    if (!o.night && t <= -15 && clearish) out.push(SPARKLE);
+    if (season === 'fall' && t < 16) out.push(tag('fall', LEAVES(FALL, 14, 1.7)));
+    else if (season === 'spring' && t > 4 && !o.night) out.push(tag('spring', LEAVES(SPRING, 14, 1.2)));
+    else if (season === 'summer' && o.night && t > 14) out.push(tag('fireflies', FIREFLIES));
+    else if (season === 'summer' && !o.night && t > 16 && clearish) out.push(tag('butterfly', BUTTERFLY));
+    if (!o.night && t <= -15 && clearish) out.push(tag('sparkle', SPARKLE));
   }
   return out;
 }
@@ -253,10 +259,25 @@ function frame(ts) {
   last = ts;
   ctx.clearRect(0, 0, W, H);
 
+  if (fading) {
+    fadeT += dt;
+    const f = Math.min(1, fadeT / FADE_S), ease = f * f * (3 - 2 * f);
+    M = 1 - ease; drawScene(fading.kind, fading.parts, fading.extras, dt, ts);
+    M = ease; drawScene(kind, parts, extras, dt, ts);
+    if (f >= 1) fading = null;
+  } else {
+    M = 1; drawScene(kind, parts, extras, dt, ts);
+  }
+  ctx.globalAlpha = 1;
+  raf = requestAnimationFrame(frame);
+}
+
+function drawScene(kind, parts, extras, dt, ts) {
+  if (!kind) return;
   if (kind === 'rain') {
     ctx.strokeStyle = '#cfe4f7'; ctx.lineWidth = 1.3; ctx.lineCap = 'round';
     for (const p of parts) {
-      ctx.globalAlpha = p.o;
+      ctx.globalAlpha = (p.o) * M;
       ctx.beginPath();
       ctx.moveTo(p.x, p.y); ctx.lineTo(p.x - p.l * 0.22, p.y + p.l);
       ctx.stroke();
@@ -267,7 +288,7 @@ function frame(ts) {
     ctx.fillStyle = '#fff';
     for (const p of parts) {
       p.d += dt * 1.1;
-      ctx.globalAlpha = p.o;
+      ctx.globalAlpha = (p.o) * M;
       if (p.r > 3.1) crystal(p.x + Math.sin(p.d) * 9, p.y, p.r * 2.2, p.d * .4);
       else {
         ctx.beginPath();
@@ -281,7 +302,7 @@ function frame(ts) {
     ctx.fillStyle = '#fff';
     for (const p of parts) {
       p.tw += dt * p.sp;
-      ctx.globalAlpha = 0.35 + Math.sin(p.tw) * 0.32;
+      ctx.globalAlpha = (0.35 + Math.sin(p.tw) * 0.32) * M;
       ctx.beginPath();
       ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
       ctx.fill();
@@ -293,9 +314,7 @@ function frame(ts) {
       if (p.x > W + 40) p.x = -p.w - 40;
     }
   }
-  for (const e of extras) { ctx.save(); e.draw(e.ps, dt, ts); ctx.restore(); }
-  ctx.globalAlpha = 1;
-  raf = requestAnimationFrame(frame);
+  for (const e of extras) { ctx.save(); ctx.globalAlpha = M; e.draw(e.ps, dt, ts); ctx.restore(); }
 }
 
 let wantOn = false, retry = null;
@@ -305,12 +324,25 @@ export function startFx(el, newKind, enabled = true, extra = {}) {
   // re-acquire the context if the canvas element itself changed
   if (el !== canvas) { canvas = el; ctx = canvas.getContext('2d'); }
   ctx = ctx || canvas.getContext('2d');
+  clearTimeout(retry);
+
+  /* Already running and asked again (every refresh repaints): keep the scene
+     if nothing about it would change, otherwise fade across to the new one. */
+  if (running && enabled) {
+    const prev = { kind, parts, extras };
+    kind = newKind; opts = extra || {};
+    const next = sceneSig();
+    if (next === sig) { kind = prev.kind; return; }
+    fading = prev; fadeT = 0; sig = next;
+    seed();
+    return;
+  }
+
   kind = newKind;
   opts = extra || {};
   wantOn = !!enabled;
 
   stopFx();
-  clearTimeout(retry);
 
   /* The OS "Reduce Motion" preference used to veto this outright, which made
      the settings toggle look broken: switching it on changed nothing and said
@@ -330,9 +362,18 @@ export function startFx(el, newKind, enabled = true, extra = {}) {
     return;
   }
 
+  sig = sceneSig();
+  fading = { kind: null, parts: [], extras: [] }; fadeT = 0;   // fade in from an empty sky
   running = true;
   last = performance.now();
   raf = requestAnimationFrame(frame);
+}
+
+/* What makes one scene different from another: the base effect and which
+   extras it carries. Temperature or wind drifting within the same scene is
+   not worth restarting the particles for. */
+function sceneSig() {
+  return kind + '|' + pickExtras().map((e) => e.id).join(',');
 }
 
 /* Whether the animation should be running, for callers that need to restart it

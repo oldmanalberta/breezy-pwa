@@ -75,6 +75,8 @@ export function alertsMarkup(data) {
 }
 
 /* ── hourly, with the temperature curve Breezy draws ── */
+const popLvl = (p) => (p >= 60 ? 'lv2' : p >= 30 ? 'lv1' : 'lv0');
+
 export function hourlyCard(data) {
   const hrs = (data.hourly ?? []).slice(0, 24);
   if (hrs.length < 2) return '';
@@ -98,7 +100,7 @@ export function hourlyCard(data) {
   const cols = hrs.map((h, i) => `
     <div class="hr${i === 0 ? ' now' : ''}">
       <div class="i">${icon(h.condition, h.night)}</div>
-      <div class="p">${h.pop != null && h.pop > 5 ? Math.round(h.pop) + '%' : ''}</div>
+      <div class="p ${popLvl(h.pop ?? 0)}">${h.pop != null && h.pop > 5 ? Math.round(h.pop) + '%' : ''}</div>
       <div class="h">${i === 0 ? 'Now' : hourLabel(h.time, data.tz)}</div>
     </div>`).join('');
 
@@ -107,7 +109,7 @@ export function hourlyCard(data) {
     <div class="hourly-wrap">
       <div style="width:${total}px">
         <svg class="spark" width="${total}" height="${H}" viewBox="0 0 ${total} ${H}">
-          <polyline points="${pts}" fill="none" stroke="var(--accent-ink)" stroke-width="2.5"
+          <polyline points="${pts}" fill="none" stroke="var(--hi-line, var(--accent-ink))" stroke-width="2.5"
                     stroke-linecap="round" stroke-linejoin="round" opacity=".9"/>
           ${labels}
         </svg>
@@ -232,8 +234,8 @@ function rangeChart(days, mode, W) {
     if (!pts) return '';
     const labels = days.map((d, i) => get(d) == null ? '' :
       `<text x="${x(i)}" y="${(y(get(d)) + dy).toFixed(1)}" text-anchor="middle"
-         font-size="${FS}" font-weight="600" fill="currentColor">${esc(mode.fmt(get(d)))}</text>`).join('');
-    return `<polyline points="${pts}" fill="none" stroke="var(--accent-ink)" stroke-width="2.5"
+         font-size="${FS}" font-weight="600" class="${cls}-t">${esc(mode.fmt(get(d)))}</text>`).join('');
+    return `<polyline points="${pts}" fill="none" stroke-width="2.5"
               stroke-linecap="round" stroke-linejoin="round" class="${cls}"/>${labels}`;
   };
 
@@ -318,7 +320,7 @@ export function dailyCard(data, modeKey = 'conditions') {
      the same height as you switch series — otherwise the sheet jumps. */
   const feet = days.map((d) => `<div class="dp-col${d.past ? ' dp-past' : ''}">
       <span class="dp-ico dim">${icon(d.condition, true)}</span>
-      <span class="dp-pop">${!d.past && d.pop != null && d.pop > 5 ? Math.round(d.pop) + '%' : ''}</span>
+      <span class="dp-pop ${popLvl(d.pop ?? 0)}">${!d.past && d.pop != null && d.pop > 5 ? Math.round(d.pop) + '%' : ''}</span>
     </div>`).join('');
 
   const chart = mode.kind === 'range' ? rangeChart(days, mode, W) : barChart(days, mode, W);
@@ -515,7 +517,7 @@ export function detailsCard(data) {
   const body = `<div class="grid">${tiles.map((t) => {
     const n = notes[t.k] ?? (t.k === c.feelsLabel ? notes['Feels like'] : null);
     const dot = n?.dot != null ? `<i class="au-dot" style="background:${SCALE_DOT[n.dot]}"></i>` : '';
-    return `<div class="tile${n?.warn ? ' warn' : ''}"><div class="k">${esc(t.k)}</div><div class="v">${esc(t.v)}</div>${
+    return `<div class="tile${n?.warn ? ' warn' : n?.dot === 1 || n?.dot === 2 ? ' mid' : ''}"><div class="k">${esc(t.k)}</div><div class="v">${esc(t.v)}</div>${
       t.s ? `<div class="s">${dot}${esc(t.s)}</div>` : ''}${
       n?.h ? `<div class="h">${t.s ? '' : dot}${esc(n.h)}</div>` : ''}${n?.n ? `<div class="n">${esc(n.n)}</div>` : ''}</div>`;
   }).join('')}</div>`;

@@ -94,7 +94,7 @@ export function readCache(id, maxAgeMs = 6 * 3600e3) {
 }
 
 /* JSON.parse gives back strings where Dates were — put them back. */
-const DATE_KEYS = new Set(['time', 'date', 'sunrise', 'sunset', 'updated', 'observed', 'issued', 'expires']);
+const DATE_KEYS = new Set(['time', 'date', 'sunrise', 'sunset', 'updated', 'checked', 'observed', 'issued', 'expires']);
 function revive(o) {
   if (Array.isArray(o)) return o.map(revive);
   if (o && typeof o === 'object') {

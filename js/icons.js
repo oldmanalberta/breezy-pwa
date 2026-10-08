@@ -236,17 +236,20 @@ export const TINTS = {
    closest to it wins, then it is lightened for dark mode and deepened for
    light mode until it reads at 4.5:1 on the cards, so any palette stays
    legible whatever it contains. */
+/* roles: which colour of the palette does which job, by index:
+   [sky, cards, high line, high text, low line, low text, calm, medium, risky].
+   Hand-picked per palette so each one reads as a set rather than a shuffle. */
 export const PALETTES = {
-  dusk:    { name: 'Dusk',    colors: ['#13205C', '#F5CF7E', '#9ABDBE', '#847E8A'] },
-  retro:   { name: 'Retro',   colors: ['#10304F', '#3C5A90', '#60C9A5', '#E95E4A', '#BA2B53'] },
-  sage:    { name: 'Sage',    colors: ['#CFD48A', '#8E9C5E', '#2F4D45', '#9EAFA2', '#A4764F', '#807B6E'] },
-  pastel:  { name: 'Pastel',  colors: ['#D9667A', '#C0D6F0', '#C6D9C4', '#B8BAD2'] },
-  garden:  { name: 'Garden',  colors: ['#3F5A6B', '#D9565C', '#F2DD73', '#719563', '#E8BED3'] },
-  prairie: { name: 'Prairie', colors: ['#D2C88A', '#5E676A', '#6B3A1E', '#9C8746', '#5C5B39'] },
-  peach:   { name: 'Peach',   colors: ['#D2E1CC', '#FAFDE6', '#FCFCB5', '#C0937F', '#D3A262'] },
-  forest:  { name: 'Forest',  colors: ['#C4AE7C', '#4F331C', '#2B3329', '#464E27', '#5E5B3A'] },
-  coast:   { name: 'Coast',   colors: ['#2E6E75', '#93C3BF', '#FDEFC8', '#FBE46A', '#EF9C7B'] },
-  sunset:  { name: 'Sunset',  colors: ['#9A1D6C', '#3F86A5', '#EEB04F', '#E06C30', '#C9E8C0'] },
+  dusk:    { name: 'Dusk',    colors: ['#13205C', '#F5CF7E', '#9ABDBE', '#847E8A'], roles: [0, 2, 1, 1, 2, 2, 2, 3, 1] },
+  retro:   { name: 'Retro',   colors: ['#10304F', '#3C5A90', '#60C9A5', '#E95E4A', '#BA2B53'], roles: [0, 1, 3, 4, 1, 2, 2, 3, 4] },
+  sage:    { name: 'Sage',    colors: ['#CFD48A', '#8E9C5E', '#2F4D45', '#9EAFA2', '#A4764F', '#807B6E'], roles: [2, 3, 4, 4, 2, 1, 3, 0, 4] },
+  pastel:  { name: 'Pastel',  colors: ['#D9667A', '#C0D6F0', '#C6D9C4', '#B8BAD2'], roles: [3, 1, 0, 0, 1, 3, 2, 3, 0] },
+  garden:  { name: 'Garden',  colors: ['#3F5A6B', '#D9565C', '#F2DD73', '#719563', '#E8BED3'], roles: [0, 3, 2, 4, 0, 0, 3, 2, 1] },
+  prairie: { name: 'Prairie', colors: ['#D2C88A', '#5E676A', '#6B3A1E', '#9C8746', '#5C5B39'], roles: [1, 0, 3, 2, 1, 4, 4, 3, 2] },
+  peach:   { name: 'Peach',   colors: ['#D2E1CC', '#FAFDE6', '#FCFCB5', '#C0937F', '#D3A262'], roles: [3, 1, 4, 3, 0, 0, 0, 2, 3] },
+  forest:  { name: 'Forest',  colors: ['#C4AE7C', '#4F331C', '#2B3329', '#464E27', '#5E5B3A'], roles: [2, 3, 0, 0, 4, 3, 3, 0, 1] },
+  coast:   { name: 'Coast',   colors: ['#2E6E75', '#93C3BF', '#FDEFC8', '#FBE46A', '#EF9C7B'], roles: [0, 1, 4, 4, 0, 1, 1, 3, 4] },
+  sunset:  { name: 'Sunset',  colors: ['#9A1D6C', '#3F86A5', '#EEB04F', '#E06C30', '#C9E8C0'], roles: [0, 4, 2, 3, 1, 1, 4, 2, 3] },
 };
 
 const MOOD = {
@@ -299,15 +302,20 @@ function pickFromPalette(colors, condition, night) {
   return best;
 }
 
-/* Every colour of a palette made readable for both modes, the weather's
-   pick first, the rest in the palette's own order. Used to give each card
-   (and each Details tile) its own colour from the palette. */
-export function paletteInks(key, condition = 'cloudy', night = false) {
+const ROLE_NAMES = ['sky', 'card', 'hiLine', 'hiText', 'loLine', 'loText', 'calm', 'mid', 'risk'];
+
+/* A palette's colours by job. sky and card come back raw (they are washes,
+   not text); the rest come as { dark, light } pairs that read at 4.5:1 on
+   the cards in each mode. */
+export function paletteRoles(key) {
   const p = PALETTES[key];
-  if (!p) return null;
-  const first = pickFromPalette(p.colors, condition, night);
-  return [first, ...p.colors.filter((c) => c !== first)]
-    .map((c) => ({ dark: readable(c, '#171B22', true), light: readable(c, '#FFFFFF', false) }));
+  if (!p?.roles) return null;
+  const out = {};
+  ROLE_NAMES.forEach((name, i) => {
+    const c = p.colors[p.roles[i]];
+    out[name] = i < 2 ? c : { dark: readable(c, '#171B22', true), light: readable(c, '#FFFFFF', false) };
+  });
+  return out;
 }
 
 /* The accent pair for a setting: { dark, light } (dark-mode and light-mode
