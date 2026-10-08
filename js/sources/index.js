@@ -72,6 +72,17 @@ export async function loadWeather(loc, pref = 'auto') {
           data.current.uv ??= om.current.uv;
           data.current.feelsLike ??= om.current.feelsLike;
           if (data.hourly.length < 12) data.hourly = om.hourly;
+          // ECCC's hourly has no cloud amount; the aurora card reads it from here
+          data.cloudHours = om.hourly;
+          /* ECCC reports sea-level pressure. Bring it back to what a barometer
+             at this elevation reads (the hypsometric equation, using the
+             observed temperature), so both sources mean the same thing. */
+          data.elevation = om.elevation;
+          const z = om.elevation, p = data.current.pressure, t = data.current.temp;
+          if (z != null && p != null) {
+            const tMean = (t ?? 15) + 273.15 + 0.0065 * z / 2;
+            data.current.pressure = p * Math.exp(-9.80665 * z / (287.05 * tMean));
+          }
           if (!data.air) data.air = om.air;
           /* Keep the US AQI even when ECCC supplied AQHI. They measure
              different things — AQHI is a health-risk score built from three

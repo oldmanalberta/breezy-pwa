@@ -110,7 +110,7 @@ https://YOUR-USERNAME.github.io/breezy-pwa/
 > files**, drag in everything from this folder (keep the `css`, `js`, `icons`
 > folders intact), and commit. Then do the Pages step above.
 
-### 2. Install on the iPhone 16e
+### 2. Install on your iPhone
 
 1. Open that URL in **Safari**. It has to be Safari — other iOS browsers make a
    bookmark instead of a real installed app.

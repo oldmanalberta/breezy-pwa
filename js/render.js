@@ -4,6 +4,7 @@ import { icon } from './icons.js';
 import { state } from './store.js';
 import { radarAvailable, staticMapSpec } from './radar.js';
 import { spansAvailable } from './sources/history.js';
+import { localChance, magLat, ovalEdge, HORIZON_REACH } from './aurora.js';
 
 /* ── formatting ───────────────────────────────────── */
 export const toF = (c) => (c * 9) / 5 + 32;
@@ -55,6 +56,7 @@ const G = {
   warn:  '<svg viewBox="0 0 24 24"><path d="M1 21h22L12 2zm12-3h-2v-2h2zm0-4h-2v-4h2z"/></svg>',
   radar: '<svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 10 10h-2a8 8 0 1 1-8-8zm0 4a6 6 0 1 0 6 6h-2a4 4 0 1 1-4-4zm0 4a2 2 0 1 0 2 2h-2z"/><path d="M12 12 21 3v4l-9 5z"/></svg>',
   ext:   '<svg viewBox="0 0 24 24"><path d="M14 3v2h3.6l-8.3 8.3 1.4 1.4L19 6.4V10h2V3zM5 5h5V3H3v18h18v-7h-2v5H5z"/></svg>',
+  aurora: '<svg viewBox="0 0 24 24"><path d="M3 20c1.5-6 3-9 5-9s2.5 5 4 5 2.5-9 5-9 3 4 4 6l-1.8.9c-.9-2-1.6-3.4-2.2-3.4-1.2 0-1.9 9-5 9s-2.6-5-4-5-2.3 2.5-3.1 5.9z"/><path d="M5 6h2M9 3h2M15 4h2M20 8h2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>',
   hist:  '<svg viewBox="0 0 24 24"><path d="M13 3a9 9 0 1 0 8.5 11.9l-1.9-.6A7 7 0 1 1 13 5v3l4.5-4L13 0zm-1 5v5.4l4.3 2.6.8-1.3-3.6-2.2V8z"/></svg>',
 };
 
@@ -131,8 +133,14 @@ let HOUR_W = 52;         // px per hour column
 
 export function measure() {
   const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
-  // sheet padding 14 + card padding 18, each side (see app.css)
-  const inner = Math.max(240, (document.querySelector('#cards')?.clientWidth || window.innerWidth) - 36);
+  // card padding 18 each side (see app.css); on wide screens #cards is split
+  // into columns, so measure one column rather than the whole strip
+  const cards = document.querySelector('#cards');
+  const cs = cards && getComputedStyle(cards);
+  const n = parseInt(cs?.columnCount, 10) || 1;
+  const gap = n > 1 ? parseFloat(cs.columnGap) || 0 : 0;
+  const width = cards?.clientWidth || window.innerWidth;
+  const inner = Math.max(240, (width - gap * (n - 1)) / n - 36);
   COL = Math.floor(inner / 7);
   HOUR_W = Math.max(Math.floor(inner / 6.5), Math.round(rem * 3));
   CHART_H = Math.round(rem * 6.25);
@@ -337,6 +345,151 @@ export function dailyCard(data, modeKey = 'conditions') {
 }
 
 /* ── details grid ─────────────────────────────────── */
+/* Each tile reads like a night on the aurora card: the number, a short
+   verdict in the accent colour, then a plain sentence that grounds it
+   against the actual temperature, the season's normal, the next few hours
+   or a familiar yardstick (the Beaufort scale, the dew point comfort bands,
+   the UV index advice). Anything worth acting on turns amber. A coloured dot
+   places scaled values (wind, UV, visibility) from easy green to severe red. */
+const BEAUFORT = [
+  [2, 'Calm', 'Smoke rises straight up.'],
+  [6, 'Light air', 'Barely noticeable.'],
+  [12, 'Light breeze', 'Felt on the face, leaves rustle.'],
+  [20, 'Gentle breeze', 'Leaves and small flags in constant motion.'],
+  [29, 'Moderate breeze', 'Raises dust and loose paper.'],
+  [39, 'Fresh breeze', 'Small trees sway.'],
+  [50, 'Strong breeze', 'Umbrellas are hard to use.'],
+  [62, 'Near gale', 'Hard to walk against.'],
+  [75, 'Gale', 'Twigs break off trees.'],
+  [Infinity, 'Strong gale', 'Expect damage.'],
+];
+const SCALE_DOT = ['#3ec46d', '#f7c948', '#f5a623', '#f2704b', '#d9434f'];
+
+function detailNotes(data) {
+  const c = data.current ?? {}, tz = data.tz;
+  const now = Date.now();
+  const ahead = (hrs) => (data.hourly ?? []).filter((h) => h.time && h.time.getTime() > now - 1800e3 && h.time.getTime() <= now + hrs * 3600e3);
+  const notes = {};
+  const d0 = data.daily?.[0];
+  // h: verdict, n: the grounding sentence, warn: worth acting on, dot: 0–4 severity
+  const put = (k, h, n = '', warn = false, dot = null) => { notes[k] = { h, n, warn, dot }; };
+
+  // feels like, then where the temperature is heading
+  if (c.temp != null) {
+    let h = 'Same as actual', n = '', warn = false;
+    if (c.feelsLike != null) {
+      const diff = Math.round(c.feelsLike - c.temp);
+      if (diff <= -2) h = `${-diff}° colder in the wind`;
+      else if (diff >= 2) h = `${diff}° warmer with humidity`;
+    }
+    const next = ahead(12).filter((x) => x.temp != null);
+    if (next.length > 2) {
+      const lo = next.reduce((a, b) => (b.temp < a.temp ? b : a));
+      const hi = next.slice(0, 7).reduce((a, b) => (b.temp > a.temp ? b : a));
+      const drop = c.temp - lo.temp, rise = hi.temp - c.temp;
+      const hrs = (lo.time - now) / 3600e3;
+      if (drop >= 5 && hrs <= 8) { n = `Cooling quickly to ${temp(lo.temp)} by ${hourLabel(lo.time, tz)}.`; warn = lo.temp <= 2; }
+      else if (drop >= 3) n = `Cooling to ${temp(lo.temp)} by ${hourLabel(lo.time, tz)}.`;
+      else if (rise >= 3) n = `Warming to ${temp(hi.temp)} by ${hourLabel(hi.time, tz)}.`;
+      else n = 'Holding steady for the next few hours.';
+    }
+    if (warn) n = n.replace(/\.$/, '. Frost possible.');
+    put('Feels like', h, n, warn);
+  }
+
+  // humidity: dryness, comfort, and whether the next hours stay dry
+  if (c.humidity != null) {
+    const rh = c.humidity, t = c.temp ?? 10;
+    const wet = Math.max(0, ...ahead(6).map((x) => x.pop ?? 0));
+    if (rh < 25) put('Humidity', 'Very dry', 'Expect static and dry skin.', true);
+    else if (rh < 45) put('Humidity', 'Dry', wet < 30 ? 'Good drying weather for laundry or harvest.' : 'Dry for now, but rain is possible later.');
+    else if (rh < 65) put('Humidity', 'Comfortable', 'Neither dry nor muggy.');
+    else if (rh < 85) put('Humidity', t >= 20 ? 'Humid' : 'Damp', t >= 20 ? 'It will feel muggy.' : 'Things dry slowly.');
+    else put('Humidity', 'Very humid', 'Dew, mist or fog likely.');
+  }
+
+  // wind on the Beaufort scale, then how much harder the gusts hit
+  if (c.windSpeed != null) {
+    const i = BEAUFORT.findIndex(([max]) => c.windSpeed < max);
+    const [, h, n] = BEAUFORT[i];
+    put('Wind', h, n, i >= 6, i <= 3 ? 0 : i <= 5 ? 1 : i <= 6 ? 2 : i <= 7 ? 3 : 4);
+  }
+  if (c.windGust != null && c.windSpeed != null) {
+    const g = c.windGust - c.windSpeed, G = c.windGust;
+    const dot = G < 30 ? 0 : G < 50 ? 1 : G < 70 ? 2 : G < 90 ? 3 : 4;
+    if (G >= 70) put('Gusts', 'Damaging', 'Secure loose items.', true, dot);
+    else if (g >= 15) put('Gusts', 'Gusty', `${windVal(g)} ${windUnit()} stronger than the steady wind.`, G >= 50, dot);
+    else put('Gusts', 'Steady', 'Close to the steady wind. No sudden blasts.', false, dot);
+  }
+
+  /* pressure: local (station) pressure, so it is judged against the normal
+     for this elevation: 1013 hPa at sea level, about 937 at Edmonton's
+     670 m. The low and high bands scale with it. */
+  if (c.pressure != null) {
+    const p = c.pressure, z = data.elevation;
+    const avg = z != null ? 1013.25 * Math.pow(1 - 2.25577e-5 * z, 5.25588) : 1013.25;
+    const k = avg / 1013.25;
+    let trend = String(c.pressureTrend || '').toLowerCase();
+    if (!trend) {
+      const fut = ahead(6).filter((x) => x.pressure != null);
+      if (fut.length > 3) {
+        const dp = fut[fut.length - 1].pressure - fut[0].pressure;
+        trend = dp <= -1.5 ? 'falling' : dp >= 1.5 ? 'rising' : 'steady';
+      }
+    }
+    const fall = trend.startsWith('fall'), rise = trend.startsWith('ris'), flat = trend.startsWith('stead');
+    const lvl = p < 1000 * k ? 'Low' : p > 1022 * k ? 'High' : 'Near average';
+    const h = lvl + (fall ? ', falling' : rise ? ', rising' : flat ? ', steady' : '');
+    const n = (z != null && z > 50 ? `Average at this elevation is about ${Math.round(avg)} hPa. ` : 'Sea-level average is 1013 hPa. ')
+      + (fall ? 'Cloud or rain may move in.' : rise ? 'The weather should settle.'
+        : lvl === 'Low' ? 'Typical of unsettled weather.' : lvl === 'High' ? 'Typical of settled weather.' : '');
+    put('Pressure', h, n.trim(), fall || lvl === 'Low');
+  }
+
+  // dew point: comfort when warm, frost or fog when cool
+  if (c.dewpoint != null) {
+    const dp = c.dewpoint, t = c.temp;
+    if (d0?.lo != null && d0.lo <= 0 && dp <= 0) put('Dew point', 'Frost likely', 'If the sky clears tonight.', true);
+    else if (t != null && t - dp <= 2) put('Dew point', 'Near saturation', 'Fog or dew likely.', true);
+    else if (t != null && t >= 18) {
+      if (dp < 10) put('Dew point', 'Comfortable', 'Not sticky.');
+      else if (dp < 16) put('Dew point', 'Noticeable', 'You will feel the humidity.');
+      else if (dp < 20) put('Dew point', 'Sticky', 'Muggy, sweat dries slowly.', true);
+      else put('Dew point', 'Oppressive', 'Take it easy outdoors.', true);
+    } else put('Dew point', t != null && t - dp >= 10 ? 'Dry air' : 'Moist air', 'Where the air would start to form dew.');
+  }
+
+  // UV: the WHO advice for the level, or that it is over for the day
+  if (c.uv != null) {
+    const u = c.uv, dot = u < 3 ? 0 : u < 6 ? 1 : u < 8 ? 2 : u < 11 ? 3 : 4;
+    if (c.night || u < 1) put('UV index', 'Over for today', 'Sun is down or too low to matter.', false, 0);
+    else if (u < 3) put('UV index', 'Low', 'No protection needed.', false, dot);
+    else if (u < 6) put('UV index', 'Moderate', 'Sunscreen if you are out for a while.', false, dot);
+    else if (u < 8) put('UV index', 'High', 'Protection needed. Seek shade at midday.', true, dot);
+    else put('UV index', u < 11 ? 'Very high' : 'Extreme', 'Burns quickly. Avoid the midday sun.', true, dot);
+  }
+
+  if (c.visibility != null) {
+    const v = c.visibility;
+    if (v >= 20) put('Visibility', 'Excellent', 'Clear views a long way.', false, 0);
+    else if (v >= 10) put('Visibility', 'Good', 'A little haze in the distance.', false, 0);
+    else if (v >= 4) put('Visibility', 'Hazy', 'Distant hills and buildings fade.', false, 1);
+    else if (v >= 1) put('Visibility', 'Poor', 'Drive with care.', true, 3);
+    else put('Visibility', 'Fog', 'Very limited visibility.', true, 4);
+  }
+
+  // normals: how today compares with the season
+  const vs = (k, f, nrm, word) => {
+    if (f == null || nrm == null) return;
+    const d = Math.round(f - nrm);
+    put(k, Math.abs(d) <= 1 ? 'Right on normal' : `${Math.abs(d)}° ${d > 0 ? 'above' : 'below'}`, `Today's ${word} is ${temp(f)}.`);
+  };
+  if (data.normals?.hi != null) vs('Normal high', d0?.hi, data.normals.hi, 'high');
+  if (data.normals?.lo != null) vs('Normal low', d0?.lo, data.normals.lo, 'low');
+
+  return notes;
+}
+
 export function detailsCard(data) {
   const c = data.current ?? {};
   const tiles = [];
@@ -348,19 +501,24 @@ export function detailsCard(data) {
       `${windUnit()}${c.windDirText ? ' · ' + c.windDirText : ''}`);
   add('Gusts', c.windGust != null ? `${windVal(c.windGust)}` : null, windUnit());
   add('Pressure', c.pressure != null ? Math.round(c.pressure) : null,
-      `hPa${c.pressureTrend ? ' · ' + c.pressureTrend : ''}`);
+      `hPa${data.elevation != null ? ' · ' + Math.round(data.elevation) + ' m elevation' : ''}`);
   add('Dew point', c.dewpoint != null ? temp(c.dewpoint) : null);
   add('UV index', c.uv != null ? Math.round(c.uv) : null,
-      c.uv == null ? '' : c.uv < 3 ? 'Low' : c.uv < 6 ? 'Moderate' : c.uv < 8 ? 'High' : c.uv < 11 ? 'Very high' : 'Extreme');
+      data.daily?.[0]?.uv != null ? `Peak ${Math.round(data.daily[0].uv)} today` : '');
   add('Visibility', c.visibility != null ? c.visibility.toFixed(c.visibility < 10 ? 1 : 0) : null, 'km');
 
   if (data.normals?.hi != null) add('Normal high', temp(data.normals.hi));
   if (data.normals?.lo != null) add('Normal low', temp(data.normals.lo));
 
   if (!tiles.length) return '';
-  const body = `<div class="grid">${tiles.map((t) =>
-    `<div class="tile"><div class="k">${esc(t.k)}</div><div class="v">${esc(t.v)}</div>${
-      t.s ? `<div class="s">${esc(t.s)}</div>` : ''}</div>`).join('')}</div>`;
+  const notes = detailNotes(data);
+  const body = `<div class="grid">${tiles.map((t) => {
+    const n = notes[t.k] ?? (t.k === c.feelsLabel ? notes['Feels like'] : null);
+    const dot = n?.dot != null ? `<i class="au-dot" style="background:${SCALE_DOT[n.dot]}"></i>` : '';
+    return `<div class="tile${n?.warn ? ' warn' : ''}"><div class="k">${esc(t.k)}</div><div class="v">${esc(t.v)}</div>${
+      t.s ? `<div class="s">${dot}${esc(t.s)}</div>` : ''}${
+      n?.h ? `<div class="h">${t.s ? '' : dot}${esc(n.h)}</div>` : ''}${n?.n ? `<div class="n">${esc(n.n)}</div>` : ''}</div>`;
+  }).join('')}</div>`;
   return card('Details', G.info, body);
 }
 
@@ -651,6 +809,175 @@ export function sunCard(data) {
     </div>`);
 }
 
+/* ── aurora ───────────────────────────────────────── */
+/* NOAA's aurora forecast made local: the OVATION grid at and poleward of the
+   place for right now, the Kp forecast against the place's geomagnetic
+   latitude for the nights ahead, and then the things that decide whether you
+   would actually see it from here — darkness, the moon and the cloud. */
+const CLOUD_OF = {
+  clear: 5, mainlyclear: 20, partly: 45, haze: 30, smoke: 40, wind: 40,
+};
+const cloudAt = (h) => h?.cloud ?? CLOUD_OF[h?.condition] ?? 90;
+
+const sunAltAt = (d, lat, lon) => { const n = days2000(d); return skyPos(sunEq(n), n, lat, lon).alt / DEG; };
+const moonAltAt = (d, lat, lon) => { const n = days2000(d); return skyPos(moonEq(n), n, lat, lon).alt / DEG; };
+const DARK = -12;           // nautical twilight: below this a display can show
+
+function nearestHour(hourly, t) {
+  let best = null, bd = Infinity;
+  for (const h of hourly ?? []) {
+    const d = Math.abs(h.time - t);
+    if (d < bd) { bd = d; best = h; }
+  }
+  return bd <= 90 * 60e3 ? best : null;
+}
+
+/* The dark stretches over the next three days, each with the strongest Kp
+   forecast inside it and the average cloud where the hourly forecast reaches. */
+function auroraNights(data, lat, lon, kp) {
+  const nights = [];
+  const start = new Date(); start.setMinutes(0, 0, 0);
+  let cur = null;
+  for (let i = 0; i <= 80; i++) {
+    const t = new Date(start.getTime() + i * 3600e3);
+    const dark = sunAltAt(t, lat, lon) < DARK;
+    if (dark && !cur) cur = { from: t, hours: [] };
+    if (dark) cur.hours.push(t);
+    if ((!dark || i === 80) && cur) { nights.push(cur); cur = null; if (nights.length === 3) break; }
+  }
+  for (const n of nights) {
+    n.to = n.hours[n.hours.length - 1];
+    const blocks = kp.filter((k) => k.time.getTime() + 3 * 3600e3 > n.from.getTime() && k.time <= n.to);
+    n.kp = blocks.length ? Math.max(...blocks.map((k) => k.kp)) : null;
+    const clouds = n.hours.map((t) => nearestHour(data.cloudHours ?? data.hourly, t)).filter(Boolean).map(cloudAt);
+    n.cloud = clouds.length >= Math.min(3, n.hours.length) ? Math.round(clouds.reduce((a, b) => a + b, 0) / clouds.length) : null;
+    const mid = n.hours[Math.floor(n.hours.length / 2)];
+    n.moonUp = n.hours.filter((t) => moonAltAt(t, lat, lon) > 0).length / n.hours.length;
+    n.moonLit = moonPhase(mid).illum;
+  }
+  return nights;
+}
+
+/* What a Kp number means, in NOAA's own storm scale words. */
+const KP_WORDS = [[3, 'Quiet'], [4, 'Unsettled'], [5, 'Active'], [6, 'Minor storm'],
+  [7, 'Moderate storm'], [8, 'Strong storm'], [9, 'Severe storm'], [Infinity, 'Extreme storm']];
+const kpWord = (kp) => KP_WORDS.find(([t]) => kp < t)[1];
+const KP_GRAD = 'linear-gradient(90deg, #3ec46d 0%, #3ec46d 25%, #f7c948 47%, #f5a623 58%, #f2704b 70%, #d9434f 82%, #7d3550 100%)';
+const KP_DOT = (kp) => kp < 4 ? '#3ec46d' : kp < 5 ? '#f7c948' : kp < 6 ? '#f5a623' : kp < 7 ? '#f2704b' : kp < 8 ? '#d9434f' : '#7d3550';
+const kpFmt = (kp) => kp.toFixed(kp % 1 ? 1 : 0);
+
+/* Kp 0–9 as a gradient, quiet to extreme, with a line at the forecast for
+   right now. Underneath, where this place sits on it: from which Kp the
+   aurora shows low on the horizon, and from which it is overhead — the part
+   a bare number never tells you. */
+function kpScale(kpNow, m, dir) {
+  const pct = (kp) => `${(Math.max(0, Math.min(9, kp)) / 9 * 100).toFixed(1)}%`;
+  const kpOver = (66.5 - m) / 2.05;
+  const kpLow = (66.5 - HORIZON_REACH - m) / 2.05;
+  const up = (k) => kpFmt(Math.ceil(Math.max(0, k) * 10) / 10);
+  let here;
+  if (kpOver <= 0) here = 'Here, even a quiet night can put the aurora overhead.';
+  else if (kpOver > 9) here = kpLow <= 9
+    ? `Here it takes Kp ${up(kpLow)}+ to see it low to the ${dir}.`
+    : 'This far south only an extreme storm reaches you.';
+  else if (kpLow <= 0.5) here = `Here any activity can show low to the ${dir}; Kp ${up(kpOver)}+ puts it overhead.`;
+  else here = `Here: Kp ${up(kpLow)}+ to see it low to the ${dir}, Kp ${up(kpOver)}+ for overhead.`;
+  const line = kpNow != null ? `
+        <i class="au-line" style="left:${pct(kpNow)}"></i>
+        <b class="au-linelbl" style="left:${pct(kpNow)};transform:translateX(${kpNow < 2 ? '-10%' : kpNow > 7 ? '-90%' : '-50%'})">Now · Kp ${kpFmt(kpNow)} ${kpWord(kpNow).toLowerCase()}</b>` : '';
+  return `
+    <div class="au-scale">
+      <div class="au-bar" style="background:${KP_GRAD}">${line}</div>
+      <div class="au-ticks"><span>Low · quiet</span><span>Storm</span><span>High · extreme</span></div>
+      <p class="au-here">${esc(here)}</p>
+    </div>`;
+}
+
+function nightVerdict(n, m) {
+  if (n.kp == null) return { label: 'No forecast', tone: 0 };
+  const edge = ovalEdge(n.kp);
+  if (m >= edge) return { label: 'Overhead', tone: 3 };
+  if (m >= edge - HORIZON_REACH / 2) return { label: 'Likely to the ' + n.dir, tone: 2 };
+  if (m >= edge - HORIZON_REACH) return { label: 'Low to the ' + n.dir, tone: 1 };
+  return { label: 'Unlikely', tone: 0 };
+}
+
+export function auroraCard(data) {
+  const { lat, lon } = data.coords ?? {};
+  if (lat == null) return '';
+  const m = Math.abs(magLat(lat, lon));
+  const a = data.aurora;
+  const dir = lat >= 0 ? 'north' : 'south';
+  const always = m >= 55;        // aurora country: the card earns its place every night
+
+  if (!a) {
+    return always ? card('Aurora', G.aurora, '<div class="skel" style="height:120px;border-radius:14px;background:var(--surface-2)"></div>') : '';
+  }
+
+  const nights = auroraNights(data, lat, lon, a.kp ?? []);
+  for (const n of nights) { n.dir = dir; n.v = nightVerdict(n, m); }
+  const now = localChance(a.ovation, lat, lon);
+
+  const tNow = new Date();
+  const darkNow = sunAltAt(tNow, lat, lon) < DARK;
+  const hNow = nearestHour(data.cloudHours ?? data.hourly, tNow);
+  const cloudNow = hNow ? cloudAt(hNow) : null;
+
+  const interesting = (now?.chance ?? 0) >= 5 || nights.some((n) => n.v.tone >= 1);
+  if (!always && !interesting) return '';
+
+  /* Right now: the forecast chance, then what stands in the way of it. */
+  const ch = now?.chance ?? null;
+  let label, why;
+  if (ch == null) { label = 'No live forecast'; why = 'NOAA\'s 30-minute forecast didn\'t load.'; }
+  else {
+    label = ch >= 50 ? 'Good chance' : ch >= 20 ? 'Possible' : ch >= 5 ? 'Slight chance' : 'Unlikely';
+    const bits = [];
+    if (!darkNow) {
+      const first = nights[0]?.from;
+      bits.push(first ? `Dark enough from ${timeLabel(first, data.tz)}` : 'Not dark enough tonight');
+    }
+    if (now.overhead >= 5) bits.push('Aurora overhead');
+    else if (ch >= 5) bits.push(`Aurora to the ${dir}`);
+    if (cloudNow != null) bits.push(cloudNow >= 70 ? `Cloudy (${cloudNow}%)` : `${cloudNow}% cloud`);
+    const mp = moonPhase();
+    if (darkNow && mp.illum > 0.6 && moonAltAt(tNow, lat, lon) > 0) bits.push('Bright moon up');
+    why = bits.join(' · ');
+    if (ch >= 5 && !darkNow) label = `${label} · not dark yet`;
+    else if (ch >= 5 && (cloudNow ?? 0) >= 80) label = `${label} · but cloudy`;
+  }
+
+  const day = (n, i) => {
+    if (i === 0 && n.from <= tNow) return 'Tonight';
+    return i === 0 && n.from - tNow < 18 * 3600e3 ? 'Tonight' : dayLabel(n.from, data.tz);
+  };
+  const cols = nights.map((n, i) => `
+    <div class="au-night t${n.v.tone}">
+      <b>${day(n, i)}</b>
+      <span class="au-kp">${n.kp != null
+        ? `<i class="au-dot" style="background:${KP_DOT(n.kp)}"></i>Kp ${kpFmt(n.kp)} · ${kpWord(n.kp)}`
+        : 'Kp –'}</span>
+      <span class="au-v">${esc(n.v.label)}</span>
+      <span class="au-s${n.cloud >= 80 ? ' cloudy' : ''}">${n.cloud != null ? (n.cloud >= 80 ? `Cloudy · ${n.cloud}%` : `${n.cloud}% cloud`) : 'Cloud n/a'}${
+        n.moonUp > 0.4 && n.moonLit > 0.5 ? ' · moon' : ''}</span>
+    </div>`).join('');
+
+  const upd = a.ovation ? timeLabel(a.ovation.forecast, data.tz) : null;
+  // the 3-hour Kp block we are in now, else the next one forecast
+  const kpRow = (a.kp ?? []).find((k) => k.time <= tNow && tNow - k.time < 3 * 3600e3)
+    ?? (a.kp ?? []).find((k) => k.time > tNow);
+  const kpNow = kpRow?.kp ?? null;
+  return card('Aurora', G.aurora, `
+    <div class="au-now">
+      <div class="au-val">${ch != null ? `${ch}<small>%</small>` : '–'}</div>
+      <div class="au-txt"><b>${esc(label)}</b><span>${esc(why)}</span></div>
+    </div>
+    <div class="au-nights">${cols}</div>
+    <button class="au-map" data-open-radar="aurora">See it on the map</button>
+    ${kpScale(kpNow, m, dir)}
+    <p class="au-src">NOAA Space Weather Prediction Center${upd ? ` · forecast for ${upd}` : ''} · geomagnetic latitude ${Math.round(m)}°</p>`);
+}
+
 /* ── historical ───────────────────────────────────── */
 /* Same column-and-chart shape as the daily panel, so a fortnight of the past
    reads the way the week ahead does. Fourteen columns rather than seven, which
@@ -689,7 +1016,7 @@ export function historyCard(data, opts = {}) {
     const labels = days.map((d, i) => d[key] == null ? '' :
       `<text x="${x(i)}" y="${(y(d[key]) + dy).toFixed(1)}" text-anchor="middle"
          font-size="${FS}" font-weight="600" fill="currentColor">${esc(temp(d[key]))}</text>`).join('');
-    return `<polyline points="${pts}" fill="none" stroke="var(--accent-ink)" stroke-width="2.5"
+    return `<polyline points="${pts}" fill="none" stroke="var(--on-surface-var)" stroke-width="2.5"
               stroke-linecap="round" stroke-linejoin="round" class="${cls}"/>${labels}`;
   };
 
@@ -760,16 +1087,22 @@ function monthlyChart(h) {
       return pts ? `<polyline points="${pts}" fill="none" stroke-width="2.5"
         stroke-linecap="round" stroke-linejoin="round" class="${cls}" ${extra}/>` : '';
     };
-    const labels = (arr, dy) => arr.map((v, i) => v == null ? '' :
-      `<text x="${x(i)}" y="${(y(v) + dy).toFixed(1)}" text-anchor="middle"
-         font-size="12.5" font-weight="600" fill="currentColor">${esc(temp(v))}</text>`).join('');
+    /* Label this year's months; the months it hasn't reached yet fall back to
+       last year's value, in the comparison grey. */
+    const labels = (now, past, dy) => M.map((_, i) => {
+      const v = now[i] ?? past[i];
+      if (v == null) return '';
+      const fill = now[i] != null ? 'currentColor' : 'var(--on-surface-var)';
+      return `<text x="${x(i)}" y="${(y(v) + dy).toFixed(1)}" text-anchor="middle"
+         font-size="12.5" font-weight="600" fill="${fill}">${esc(temp(v))}</text>`;
+    }).join('');
 
     tempSvg = `<svg class="dp-chart" width="${W}" height="${TH}" viewBox="0 0 ${W} ${TH}">
-        ${line(tn.hi, 'mo-line-now', 'stroke-dasharray="2 5"')}
-        ${line(tn.lo, 'mo-line-now', 'stroke-dasharray="2 5"')}
-        ${line(tp.hi, 'mo-line-past')}
-        ${line(tp.lo, 'mo-line-past dp-lo')}
-        ${labels(tp.hi, -8)}${labels(tp.lo, 16)}
+        ${line(tp.hi, 'mo-line-past', 'stroke-dasharray="2 5"')}
+        ${line(tp.lo, 'mo-line-past', 'stroke-dasharray="2 5"')}
+        ${line(tn.hi, 'mo-line-now')}
+        ${line(tn.lo, 'mo-line-now dp-lo')}
+        ${labels(tn.hi, tp.hi, -8)}${labels(tn.lo, tp.lo, 16)}
       </svg>`;
   }
 
@@ -787,7 +1120,7 @@ function monthlyChart(h) {
         <text x="${cx}" y="${(base - hgt - 5).toFixed(1)}" text-anchor="middle"
           font-size="10" font-weight="700" class="${cls}-txt">${mm(v)}</text>`;
     };
-    return bar(past[i], -9, 'mo-past') + bar(now[i], 9, 'mo-now');
+    return bar(now[i], -9, 'mo-now') + bar(past[i], 9, 'mo-past');
   }).join('');
   const barSvg = `<svg class="dp-chart" width="${W}" height="${BH}" viewBox="0 0 ${W} ${BH}">${bars}</svg>`;
 
@@ -799,8 +1132,8 @@ function monthlyChart(h) {
   return `
     <div class="mo-wrap">
       <div class="mo-key">
-        <span><i class="mo-sw mo-past"></i>${h.year}${tPast != null ? ` · ${tPast} mm` : ''}</span>
         <span><i class="mo-sw mo-now"></i>${h.nowYear}${tNow != null ? ` · ${tNow} mm` : ''}</span>
+        <span><i class="mo-sw mo-past"></i>${h.year}${tPast != null ? ` · ${tPast} mm` : ''}</span>
       </div>
       <div class="dp-scroll">
         <div style="width:${W}px">
@@ -810,7 +1143,7 @@ function monthlyChart(h) {
         </div>
       </div>
       <p class="mo-note">Mean daily high and low, and total precipitation in mm, for each
-        month of ${h.year} — ${h.nowYear} dotted behind for comparison. ${h.nowYear} runs to
+        month of ${h.nowYear}, with ${h.year} dotted behind for comparison. ${h.nowYear} runs to
         the last few days: reanalysis lags real time, so the current month is partial.</p>
     </div>`;
 }
@@ -826,12 +1159,13 @@ export const CARDS = {
   details: { label: 'Details',              fn: detailsCard },
   air:     { label: 'Air quality',          fn: airCard },
   sun:     { label: 'Sun & moon',           fn: sunCard },
+  aurora:  { label: 'Aurora',               fn: auroraCard },
   history: { label: 'Historical',           fn: (d, o) => historyCard(d, o) },
 };
 
 /* Daily leads: with the shortened hero it is the card already on screen when a
    location opens, which is the one worth seeing first. */
-export const DEFAULT_ORDER = ['daily', 'hourly', 'radar', 'details', 'air', 'sun', 'history'];
+export const DEFAULT_ORDER = ['daily', 'hourly', 'radar', 'details', 'air', 'sun', 'aurora', 'history'];
 
 export function normalizeOrder(order) {
   const seen = new Set();

@@ -55,6 +55,8 @@
 
     <div class="place-dots" id="place-dots" aria-hidden="true"></div>
 
+    <p class="hero-quote" id="hero-quote" aria-live="polite" hidden></p>
+
     <div class="scroll-cue" id="scroll-cue">
       <svg viewBox="0 0 24 24"><path d="M7.4 8.6 12 13.2l4.6-4.6L18 10l-6 6-6-6z"/></svg>
     </div>
@@ -113,6 +115,13 @@
       <button data-v="small">Smaller</button><button data-v="normal" class="on">Default</button><button data-v="large">Larger</button>
     </div>
     <p class="tiny pad" style="margin-top:8px">The app already follows the phone's Text Size (Settings → Display &amp; Brightness). This nudges it further either way.</p>
+  </div>
+  <div class="setting">
+    <label>Accent colour <span id="accent-name" class="setting-val"></span></label>
+    <div class="seg swatches" id="seg-accent" role="radiogroup" aria-label="Accent colour"></div>
+    <p class="tiny pad sw-head">Palettes · the colour changes with the weather</p>
+    <div class="seg swatches palettes" id="seg-palette" role="radiogroup" aria-label="Colour palettes"></div>
+    <p class="tiny pad" style="margin-top:8px">Used for charts, highlights and selected buttons. Sky changes with the weather, as before.</p>
   </div>
   <div class="setting">
     <label>Weather source</label>

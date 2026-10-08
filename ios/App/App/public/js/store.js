@@ -9,17 +9,22 @@ const DEFAULTS = {
   wind: 'kmh',
   source: 'auto',
   fx: 'on',
+  accent: 'blue',          // key into TINTS in icons.js; 'sky' follows the weather
   mapTheme: 'terrain',     // radar base map key, see BASEMAPS in radar.js
   /* Renderer for the radar overlay: 'images' | 'flow'.
      Deliberately a new key rather than reusing radarFlow — that one already
      defaulted to on in saved settings, and this needs to flip to the renderer
-     that actually works on hardware where WebGL silently draws nothing. */
-  radarRender: 'images',
+     that actually works on hardware where WebGL silently draws nothing.
+     Smooth ('flow') is the default since rev 2; setRenderer in radar.js still
+     drops to 'images' where WebGL2 is missing or the context is lost. */
+  radarRender: 'flow',
   radarDebug: 'off',       // toast each radar loading stage, for bug reports
+  radarRev: 2,             // see the migration in read()
   radarLayer: 'precip',    // data overlay: precip | smoke
   /* Wind is not one of those — it rides on top of whichever is showing.
      off | particles | full (particles plus speed shading underneath) */
   windMode: 'off',
+  auroraMap: 'off',        // NOAA aurora forecast drawn over the radar map
   dailyMode: 'conditions', // which series the daily panel charts
   historyYears: 1,         // how far back the historical card looks
   order: null,             // card order; null means the default arrangement
@@ -29,8 +34,20 @@ const DEFAULTS = {
 };
 
 function read() {
-  try { return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(KEY) || '{}') }; }
-  catch { return { ...DEFAULTS }; }
+  try {
+    const saved = JSON.parse(localStorage.getItem(KEY) || '{}');
+    const s = { ...DEFAULTS, ...saved };
+    /* save() writes every key, so a changed default never reaches anyone who
+       has opened the app before. Smooth motion now renders reliably and
+       became the default in rev 2, and diagnostics were left on during its
+       testing, so reset both once for existing installs. */
+    if ((saved.radarRev ?? 0) < 2) {
+      s.radarRender = 'flow';
+      s.radarDebug = 'off';
+      s.radarRev = 2;
+    }
+    return s;
+  } catch { return { ...DEFAULTS }; }
 }
 
 export const state = read();

@@ -18,13 +18,15 @@ const API = 'https://api.open-meteo.com/v1/forecast';
 
 const COLS = 13;          // grid samples across the view
 const ROWS = 11;
-const PARTICLES = 620;
-const MAX_AGE = 90;       // frames before a particle respawns
+const PARTICLES = 430;
+const MAX_AGE = 70;       // frames before a particle respawns
 /* Screen px per frame per km/h. Successive attempts to make windy areas obvious
-   kept overshooting into something frantic. The point is to read the flow at a
+   kept overshooting into something frantic, and at 620 particles with long
+   trails the overlay swamped the map ("a million tadpoles"), so it is now
+   sparser, slower and short-tailed. The point is to read the flow at a
    glance while the map underneath stays calm, so this errs slow: a gale still
    plainly outruns a light breeze, but nothing races. */
-const SPEED = 0.3;
+const SPEED = 0.16;
 
 /* Speed shading under the particles, on the same blue-to-red reading as the
    precipitation scale: calm is blue, gale is red. Stops are km/h. */
@@ -119,11 +121,11 @@ export function createWindLayer(canvas) {
     /* Fade rather than clear, so each particle leaves a short trail — that is
        what makes the flow legible instead of a swarm of dots. */
     ctx.globalCompositeOperation = 'destination-out';
-    ctx.fillStyle = 'rgba(0,0,0,0.10)';
+    ctx.fillStyle = 'rgba(0,0,0,0.12)';
     ctx.fillRect(0, 0, W, H);
     ctx.globalCompositeOperation = 'source-over';
 
-    ctx.lineWidth = 1.6;
+    ctx.lineWidth = 1.4;
     ctx.lineCap = 'round';
 
     for (const p of parts) {

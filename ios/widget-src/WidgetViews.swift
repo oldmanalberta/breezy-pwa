@@ -8,11 +8,16 @@ import SwiftUI
 
 struct Theme {
     let scheme: ColorScheme
+    /// The app's chosen accent as [light, dark], or nil for the default.
+    var tint: [UInt32]? = nil
     var surface: Color      { scheme == .dark ? Color(hex: 0x171B22) : .white }
     var surface2: Color     { scheme == .dark ? Color(hex: 0x1E232C) : Color(hex: 0xEEF2F7) }
     var ink: Color          { scheme == .dark ? Color(hex: 0xE3E6EA) : Color(hex: 0x161A20) }
     var inkVar: Color       { scheme == .dark ? Color(hex: 0xA8B0BB) : Color(hex: 0x5A6472) }
-    var accent: Color       { scheme == .dark ? Color(hex: 0x8AB4F8) : Color(hex: 0x3F6288) }
+    var accent: Color {
+        if let t = tint, t.count == 2 { return Color(hex: scheme == .dark ? t[1] : t[0]) }
+        return scheme == .dark ? Color(hex: 0x8AB4F8) : Color(hex: 0x3F6288)
+    }
     var outline: Color      { scheme == .dark ? Color(hex: 0x333A45) : Color(hex: 0xD6DDE6) }
 }
 
@@ -81,6 +86,10 @@ struct RangeCurve: View {
     let lo: [Int?]
     let theme: Theme
     var labelSize: CGFloat = 13
+    /// Room kept above and below the line for the labels. The plotting band is
+    /// what is left, so it must stay positive or the line comes out upside down.
+    var padT: CGFloat = 20
+    var padB: CGFloat = 20
 
     var body: some View {
         GeometryReader { geo in
@@ -88,9 +97,9 @@ struct RangeCurve: View {
             let col = geo.size.width / CGFloat(n)
             let vals = (hi + lo).compactMap { $0 }
             let mn = vals.min() ?? 0, mx = max(vals.max() ?? 1, (vals.min() ?? 0) + 1)
-            let padT: CGFloat = 20, padB: CGFloat = 20
+            let band = max(geo.size.height - padT - padB, 4)
             let y: (Int) -> CGFloat = { v in
-                padT + (1 - CGFloat(v - mn) / CGFloat(mx - mn)) * (geo.size.height - padT - padB)
+                padT + (1 - CGFloat(v - mn) / CGFloat(mx - mn)) * band
             }
             let x: (Int) -> CGFloat = { i in CGFloat(i) * col + col / 2 }
 
@@ -131,7 +140,8 @@ struct SparkCurve: View {
     let theme: Theme
 
     var body: some View {
-        RangeCurve(hi: temps, lo: [], theme: theme, labelSize: 12.5)
+        // only labels above the line here, so it needs little room below
+        RangeCurve(hi: temps, lo: [], theme: theme, labelSize: 12.5, padT: 18, padB: 4)
     }
 }
 
@@ -164,7 +174,7 @@ struct ForecastView: View {
     let entry: BreezyEntry
 
     var body: some View {
-        let theme = Theme(scheme: scheme)
+        let theme = Theme(scheme: scheme, tint: entry.forecast?.accent)
         if let f = entry.forecast {
             switch family {
             case .systemSmall: small(f, theme)
@@ -243,6 +253,7 @@ struct ForecastView: View {
         return VStack(alignment: .leading, spacing: 3) {
             CardHead(title: "\(days.count)-day forecast", symbol: "calendar", theme: t)
             NowLine(f: f, theme: t, big: 24)
+                .padding(.top, 2).padding(.bottom, 12)   // room between now and the week
             HStack(spacing: 0) {
                 ForEach(Array(days.enumerated()), id: \.offset) { i, d in
                     VStack(spacing: 1) {
@@ -268,9 +279,9 @@ struct ForecastView: View {
             if let a = f.alert {
                 Text(a).font(Aileron.bold(11)).foregroundStyle(Color(hex: 0xE4573D)).lineLimit(1)
             }
-            Rectangle().fill(t.outline).frame(height: 1).padding(.vertical, 4)
+            Rectangle().fill(t.outline).frame(height: 1).padding(.top, 6).padding(.bottom, 4)
             CardHead(title: "Hourly forecast", symbol: "clock", theme: t)
-            HourStrip(f: f, hours: hours, theme: t, firstIsNow: true, sparkHeight: 44, iconSize: 24)
+            HourStrip(f: f, hours: hours, theme: t, firstIsNow: true, sparkHeight: 36, iconSize: 20)
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 12).padding(.vertical, 10)
@@ -286,7 +297,7 @@ struct HourlyView: View {
     let entry: BreezyEntry
 
     var body: some View {
-        let t = Theme(scheme: scheme)
+        let t = Theme(scheme: scheme, tint: entry.forecast?.accent)
         if let f = entry.forecast {
             let hours = f.hours(from: entry.date, count: family == .systemLarge ? 12 : 6)
             VStack(alignment: .leading, spacing: 4) {

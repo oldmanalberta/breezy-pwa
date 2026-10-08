@@ -202,6 +202,125 @@ const ACCENT_DAY = {
   smoke: '#D8B98F', haze: '#E0CE96',
 };
 
+/* Accent choices for Settings → Accent colour. Each is one of Apple's system
+   tint colours in its Increase Contrast form, because those are the variants
+   that clear 4.5:1 as text: `dark` sits on the dark surfaces and the hero sky
+   (and fills the selected pills, under #06121f text), `light` is the ink on
+   white cards in light mode. Green's light variant is nudged a shade darker
+   than Apple's #248A3D, which measures 4.4:1 on white. Red is left out on
+   purpose: the HIG keeps it for destructive actions, and here for warnings.
+   'sky' is the original behaviour, where the accent follows the weather. */
+export const TINTS = {
+  sky:    { name: 'Sky' },
+  blue:   { name: 'Blue',   dark: '#409CFF', light: '#0040DD' },
+  indigo: { name: 'Indigo', dark: '#7D7AFF', light: '#3634A3' },
+  purple: { name: 'Purple', dark: '#DA8FFF', light: '#8944AB' },
+  pink:   { name: 'Pink',   dark: '#FF6482', light: '#D30F45' },
+  orange: { name: 'Orange', dark: '#FFB340', light: '#C93400' },
+  yellow: { name: 'Yellow', dark: '#FFD426', light: '#B25000' },
+  green:  { name: 'Green',  dark: '#30DB5B', light: '#1F7A36' },
+  teal:   { name: 'Teal',   dark: '#5DE6FF', light: '#008299' },
+  /* Solid row: fully saturated primaries, a step deeper than the softer
+     system tints above so the two rows read apart, and taken darker again in
+     light mode so they still read as text on white. */
+  red:     { name: 'Solid red',    dark: '#FF3326', light: '#D91A10' },
+  sgreen:  { name: 'Solid green',  dark: '#12C043', light: '#0F8A31' },
+  sblue:   { name: 'Solid blue',   dark: '#1A7DFF', light: '#0059DB' },
+  syellow: { name: 'Solid yellow', dark: '#FFC400', light: '#B98800' },
+  spurple: { name: 'Solid purple', dark: '#B44DF0', light: '#8E2FC4' },
+};
+
+/* Palettes: sets of colours that work together, from which the accent is
+   picked to suit the weather, the way Sky follows it. Each condition has a
+   mood (a hue to aim for, or "grey" for the muted ones); the palette colour
+   closest to it wins, then it is lightened for dark mode and deepened for
+   light mode until it reads at 4.5:1 on the cards, so any palette stays
+   legible whatever it contains. */
+export const PALETTES = {
+  dusk:    { name: 'Dusk',    colors: ['#13205C', '#F5CF7E', '#9ABDBE', '#847E8A'] },
+  retro:   { name: 'Retro',   colors: ['#10304F', '#3C5A90', '#60C9A5', '#E95E4A', '#BA2B53'] },
+  sage:    { name: 'Sage',    colors: ['#CFD48A', '#8E9C5E', '#2F4D45', '#9EAFA2', '#A4764F', '#807B6E'] },
+  pastel:  { name: 'Pastel',  colors: ['#D9667A', '#C0D6F0', '#C6D9C4', '#B8BAD2'] },
+  garden:  { name: 'Garden',  colors: ['#3F5A6B', '#D9565C', '#F2DD73', '#719563', '#E8BED3'] },
+  prairie: { name: 'Prairie', colors: ['#D2C88A', '#5E676A', '#6B3A1E', '#9C8746', '#5C5B39'] },
+  peach:   { name: 'Peach',   colors: ['#D2E1CC', '#FAFDE6', '#FCFCB5', '#C0937F', '#D3A262'] },
+  forest:  { name: 'Forest',  colors: ['#C4AE7C', '#4F331C', '#2B3329', '#464E27', '#5E5B3A'] },
+  coast:   { name: 'Coast',   colors: ['#2E6E75', '#93C3BF', '#FDEFC8', '#FBE46A', '#EF9C7B'] },
+  sunset:  { name: 'Sunset',  colors: ['#9A1D6C', '#3F86A5', '#EEB04F', '#E06C30', '#C9E8C0'] },
+};
+
+const MOOD = {
+  clear: 45, mainlyclear: 45, partly: 200, wind: 165,
+  drizzle: 205, rain: 210, heavyrain: 215, rainshower: 205,
+  freezing: 190, sleet: 190, snow: 195, heavysnow: 195, snowshower: 195,
+  thunder: 325, thunderrain: 325, hail: 300,
+  cloudy: 'grey', overcast: 'grey', fog: 'grey', haze: 'grey', smoke: 'grey',
+};
+
+const hexRgb = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255);
+const rgbHex = (rgb) => '#' + rgb.map((v) => Math.round(Math.max(0, Math.min(1, v)) * 255).toString(16).padStart(2, '0')).join('').toUpperCase();
+function rgbHsl([r, g, b]) {
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b), l = (mx + mn) / 2, d = mx - mn;
+  if (!d) return [0, 0, l];
+  const s = d / (1 - Math.abs(2 * l - 1));
+  const h = mx === r ? ((g - b) / d) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
+  return [(h * 60 + 360) % 360, s, l];
+}
+function hslRgb([h, s, l]) {
+  const c = (1 - Math.abs(2 * l - 1)) * s, x = c * (1 - Math.abs(((h / 60) % 2) - 1)), m = l - c / 2;
+  const [r, g, b] = h < 60 ? [c, x, 0] : h < 120 ? [x, c, 0] : h < 180 ? [0, c, x] : h < 240 ? [0, x, c] : h < 300 ? [x, 0, c] : [c, 0, x];
+  return [r + m, g + m, b + m];
+}
+const lum = (rgb) => { const [r, g, b] = rgb.map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4)); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+const contrast = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p); return (x + 0.05) / (y + 0.05); };
+
+/* Walk the lightness up (for dark cards) or down (for light ones) until the
+   colour clears 4.5:1, keeping its hue and most of its character. */
+function readable(hex, bg, up) {
+  let [h, s, l] = rgbHsl(hexRgb(hex));
+  const B = hexRgb(bg);
+  s = Math.max(s, 0.18);
+  for (let i = 0; i < 60 && contrast(hslRgb([h, s, l]), B) < 4.5; i++) l = up ? Math.min(0.97, l + 0.015) : Math.max(0.05, l - 0.015);
+  return rgbHex(hslRgb([h, s, l]));
+}
+
+function pickFromPalette(colors, condition, night) {
+  const want = night && (condition === 'clear' || condition === 'mainlyclear') ? 230 : MOOD[condition] ?? 210;
+  let best = colors[0], score = Infinity;
+  for (const c of colors) {
+    const rgb = hexRgb(c), [h, , l] = rgbHsl(rgb);
+    const chroma = Math.max(...rgb) - Math.min(...rgb);   // how colourful, unlike HSL's saturation, which flatters pastels
+    const edge = l > 0.93 || l < 0.08 ? 0.6 : 0;          // near-white or near-black make poor accents
+    const sc = want === 'grey'
+      ? chroma + edge
+      : Math.min(Math.abs(h - want), 360 - Math.abs(h - want)) / 180 + (1 - chroma) * 0.6 + edge;
+    if (sc < score) { score = sc; best = c; }
+  }
+  return best;
+}
+
+/* Every colour of a palette made readable for both modes, the weather's
+   pick first, the rest in the palette's own order. Used to give each card
+   (and each Details tile) its own colour from the palette. */
+export function paletteInks(key, condition = 'cloudy', night = false) {
+  const p = PALETTES[key];
+  if (!p) return null;
+  const first = pickFromPalette(p.colors, condition, night);
+  return [first, ...p.colors.filter((c) => c !== first)]
+    .map((c) => ({ dark: readable(c, '#171B22', true), light: readable(c, '#FFFFFF', false) }));
+}
+
+/* The accent pair for a setting: { dark, light } (dark-mode and light-mode
+   ink), or null for Sky, which follows the hero's own accent. */
+export function accentFor(key, condition = 'cloudy', night = false) {
+  const t = TINTS[key];
+  if (t?.dark) return { dark: t.dark, light: t.light };
+  const p = PALETTES[key];
+  if (!p) return null;
+  const c = pickFromPalette(p.colors, condition, night);
+  return { dark: readable(c, '#1E232C', true), light: readable(c, '#EEF2F7', false), base: c };
+}
+
 export function sky(key, night) {
   const table = night ? SKY_NIGHT : SKY_DAY;
   const g = table[key] ?? table.cloudy;

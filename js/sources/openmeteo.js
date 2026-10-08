@@ -10,6 +10,8 @@ const AQ  = 'https://air-quality-api.open-meteo.com/v1/air-quality';
 const HOURLY = [
   'temperature_2m', 'apparent_temperature', 'weather_code', 'precipitation_probability',
   'wind_speed_10m', 'wind_direction_10m', 'is_day', 'uv_index', 'visibility', 'dew_point_2m',
+  'surface_pressure',  // for the Details card's pressure trend
+  'cloud_cover',   // for the aurora card: a display behind cloud is no display
 ].join(',');
 
 const DAILY = [
@@ -117,6 +119,8 @@ export async function fetchOpenMeteo({ lat, lon, tz, model = null }) {
     windDir: at(H.wind_direction_10m, i),
     windDirText: compass(at(H.wind_direction_10m, i)),
     uv: at(H.uv_index, i),
+    cloud: at(H.cloud_cover, i),
+    pressure: at(H.surface_pressure, i),
   })).filter((h) => h.time && h.time.getTime() >= now - 3600e3)
      .slice(0, 48);   // the card shows 24; keep a little slack, not 16 days'
                       // worth — the whole payload gets cached in localStorage.
@@ -190,6 +194,8 @@ export async function fetchOpenMeteo({ lat, lon, tz, model = null }) {
       windGust: c.wind_gusts_10m ?? null,
       windDir: c.wind_direction_10m ?? null,
       windDirText: compass(c.wind_direction_10m),
+      // what a barometer here reads; the Details card judges it against the
+      // normal for this elevation rather than the sea-level 1013
       pressure: c.surface_pressure ?? null,
       pressureTrend: '',
       station: '',
@@ -205,6 +211,7 @@ export async function fetchOpenMeteo({ lat, lon, tz, model = null }) {
     sun: { sunrise: daily[0]?.sunrise ?? null, sunset: daily[0]?.sunset ?? null },
     normals: { hi: null, lo: null },
     tz: d.timezone,
+    elevation: d.elevation ?? null,   // metres, from Open-Meteo's terrain model
   };
 }
 

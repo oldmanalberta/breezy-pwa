@@ -3,12 +3,14 @@
 import { state, set, save, addPlace, removePlace, activePlace, cacheWeather, readCache } from './store.js';
 import { loadWeather } from './sources/index.js';
 import { geocode, flagOf } from './sources/openmeteo.js';
-import { icon, sky, fxKind } from './icons.js';
+import { icon, sky, fxKind, TINTS, PALETTES, accentFor, paletteInks } from './icons.js';
 import { startFx, stopFx } from './fx.js';
 import { createRadar } from './radar.js';
 import { fetchHistory } from './sources/history.js';
 import { renderCards, alertsMarkup, temp, timeLabel, CARDS, DEFAULT_ORDER, normalizeOrder } from './render.js';
 import { publishWidget } from './native.js';
+import { fetchAurora, auroraCached, localChance } from './aurora.js';
+import { headsUp } from './headsup.js';
 
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => Array.from(document.querySelectorAll(s));
@@ -76,6 +78,38 @@ async function loadHistory(place) {
   } catch (e) {
     console.warn('history failed', e);
   } finally { if (histBusy === key) histBusy = null; }
+}
+
+/* ── aurora ───────────────────────────────────────── */
+/* One global forecast, not per place, fetched after the page is up like the
+   historical card. Repaint only when a new forecast actually arrives, for the
+   same reason loadHistory is careful about it. */
+/* What the sky animation needs to choose its seasonal extras. */
+function fxOpts(data) {
+  const c = data?.current ?? {}, ll = data?.coords;
+  const a = auroraCached();
+  return {
+    condition: c.condition, night: !!c.night, temp: c.temp, month: new Date().getMonth() + 1,
+    lat: ll?.lat, aurora: a?.ovation && ll ? localChance(a.ovation, ll.lat, ll.lon)?.chance ?? 0 : 0,
+  };
+}
+const runFx = () => current && startFx($('#fx'), fxKind(current.current.condition), state.fx === 'on', fxOpts(current));
+
+function paintHeadsUp(data) {
+  const el = $('#hero-quote');
+  if (!el) return;
+  let lines = [];
+  try { lines = headsUp(data); } catch (e) { console.warn('heads-up failed', e); }
+  el.innerHTML = lines.map((t, i) => `<span class="${i ? 'hq-2' : 'hq-1'}">${t.replace(/[&<>]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[ch])}</span>`).join('');
+  el.hidden = !lines.length;
+}
+
+async function loadAurora() {
+  const before = auroraCached();
+  try {
+    const a = await fetchAurora();
+    if (a !== before && current) { current.aurora = a; repaintCard(); paintHeadsUp(current); if (!radar) runFx(); }
+  } catch (e) { console.warn('aurora failed', e); }
 }
 
 /* Park the historical strip so the matching day sits in the middle, leaving
@@ -184,7 +218,7 @@ function stepPlace(dir) {
 /* ── radar ────────────────────────────────────────── */
 let radar = null;
 
-function openRadar() {
+function openRadar(focus = null) {
   const place = activePlace();
   if (!place || radar) return;
   closePanels();
@@ -195,7 +229,7 @@ function openRadar() {
   stopFx();                       // the sky canvas is hidden behind the map
   // push a history entry so the phone's back gesture closes the radar
   history.pushState({ radar: true }, '');
-  radar = createRadar(host, { lat: place.lat, lon: place.lon, tz: place.tz });
+  radar = createRadar(host, { lat: place.lat, lon: place.lon, tz: place.tz, focus });
 }
 
 function closeRadar() {
@@ -208,7 +242,7 @@ function closeRadar() {
   document.body.style.overflow = '';
   // the radar panel can flip the renderer itself; keep Settings honest
   $$('#seg-radarrender button').forEach((b) => b.classList.toggle('on', b.dataset.v === state.radarRender));
-  if (current) startFx($('#fx'), fxKind(current.current.condition), state.fx === 'on');
+  runFx();
 }
 
 /* ── rendering ────────────────────────────────────── */
@@ -221,6 +255,47 @@ function mixHex(hex, target, t) {
   return `#${m(r, R)}${m(g, G)}${m(b, B)}`;
 }
 
+/* The accent the cards, charts and controls use. A fixed tint from Settings,
+   or with 'sky' the weather's own accent as before. The sky accent is tuned to
+   sit on the dark hero gradient; reused as text inside a white card it drops
+   to ~2:1 contrast, so a darkened variant is published alongside it and the
+   stylesheet's media query chooses between them. */
+function applyAccent() {
+  const root = document.documentElement.style;
+  const c = current?.current ?? {};
+  const tint = accentFor(state.accent, c.condition, c.night);   // palettes follow the weather
+  if (tint) {
+    root.setProperty('--accent', tint.dark);
+    root.setProperty('--accent-dark', tint.light);
+  } else {
+    const a = root.getPropertyValue('--sky-accent') || '#8ab4f8';
+    root.setProperty('--accent', a);
+    root.setProperty('--accent-dark', mixHex(a, '#0b2038', 0.55));
+  }
+  applyPaletteCards();
+}
+
+/* With a palette chosen, each card takes the next colour of the palette in
+   turn (the weather's pick leads), and the Details tiles cycle through it
+   too. Everything inside a card that uses the accent (its heading, chart
+   lines, bars, verdicts) follows, and the card gets a faint wash of its
+   colour. Written as a small stylesheet so it costs nothing per paint. */
+function applyPaletteCards() {
+  const c = current?.current ?? {};
+  const inks = paletteInks(state.accent, c.condition, c.night);
+  let el = document.getElementById('pal-style');
+  if (!inks) { if (el) el.textContent = ''; return; }
+  if (!el) { el = document.createElement('style'); el.id = 'pal-style'; document.head.append(el); }
+  const n = inks.length;
+  const vars = inks.map((p, i) => `--p${i}:${p.dark};--p${i}-l:${p.light};`).join('');
+  const rule = (sel, i, light) => `${sel}:nth-child(${n}n+${i + 1}){--accent:var(--p${i});--accent-ink:var(--p${i}${light ? '-l' : ''});}`;
+  const block = (light) => inks.map((_, i) => rule('#cards > .card', i, light) + rule('#cards .tile', (i + 2) % n, light)).join('');
+  el.textContent = `:root{${vars}}${block(false)}
+#cards > .card{background:color-mix(in srgb,var(--accent) 6%,var(--surface));}
+@media (prefers-color-scheme: light){${block(true)}
+#cards > .card{background:color-mix(in srgb,var(--accent-ink) 4%,var(--surface));}}`;
+}
+
 function paint(data, place, stale = false) {
   current = data;
   const c = data.current;
@@ -230,12 +305,8 @@ function paint(data, place, stale = false) {
   root.setProperty('--sky-1', g[0]);
   root.setProperty('--sky-2', g[1]);
   root.setProperty('--sky-3', g[2]);
-  root.setProperty('--accent', accent);
-
-  /* The sky accent is tuned to sit on the dark hero gradient; reused as text
-     inside a white card it drops to ~2:1 contrast. Publish a darkened variant
-     alongside it and let the stylesheet's media query choose between them. */
-  root.setProperty('--accent-dark', mixHex(accent, '#0b2038', 0.55));
+  root.setProperty('--sky-accent', accent);
+  applyAccent();
   document.querySelector('meta[name="theme-color"]')?.setAttribute('content', g[0]);
 
   $('#place-name').textContent = place.name;
@@ -262,12 +333,14 @@ function paint(data, place, stale = false) {
 
   data.tz = place.tz;
   data.coords = { lat: place.lat, lon: place.lon };
+  data.aurora = auroraCached();
   $('#cards').innerHTML = renderCards(data, {
     dailyMode: state.dailyMode,
     historyYears: state.historyYears,
     order: state.order ?? DEFAULT_ORDER,
   });
   loadHistory(place);
+  loadAurora();
   parkDailyScroll();
   centreHistoryScroll();
 
@@ -275,7 +348,8 @@ function paint(data, place, stale = false) {
   if (data.supplement) srcBits.push(`+ ${data.supplement}`);
   $('#source-line').textContent = `Data from ${srcBits.join(' ')}`;
 
-  startFx($('#fx'), fxKind(c.condition), state.fx === 'on');
+  paintHeadsUp(data);
+  startFx($('#fx'), fxKind(c.condition), state.fx === 'on', fxOpts(data));
 
   /* The Home Screen widget shows the starred location, or whatever the app
      last painted when nothing is starred. */
@@ -543,7 +617,8 @@ function wire() {
       return;
     }
 
-    if (e.target.closest('[data-open-radar]')) openRadar();
+    const or = e.target.closest('[data-open-radar]');
+    if (or) openRadar(or.dataset.openRadar || null);
   });
 
   $('#alert-banner').addEventListener('click', toggleAlerts);
@@ -582,11 +657,27 @@ function wire() {
   seg('#seg-unit', 'unit', () => current && paint(current, activePlace()));
   seg('#seg-wind', 'wind', () => current && paint(current, activePlace()));
   seg('#seg-source', 'source', () => { current = null; refresh(); });
-  seg('#seg-fx', 'fx', () => current && startFx($('#fx'), fxKind(current.current.condition), state.fx === 'on'));
+  seg('#seg-fx', 'fx', runFx);
   seg('#seg-maptheme', 'mapTheme', () => { if (current) paint(current, activePlace()); });
   seg('#seg-radarrender', 'radarRender');
   seg('#seg-radardebug', 'radarDebug');
   seg('#seg-textsize', 'textSize', applyTextScale);
+  $('#seg-accent').innerHTML = Object.entries(TINTS).map(([k, t]) => `
+    <button data-v="${k}" role="radio" aria-label="${t.name}" title="${t.name}"
+      style="--sw:${t.dark ?? 'conic-gradient(#FFC44D 0 25%, #8EC5F5 0 50%, #9BB8E8 0 75%, #BFE0F5 0)'}"></button>`).join('');
+  $('#seg-palette').innerHTML = Object.entries(PALETTES).map(([k, p]) => `
+    <button data-v="${k}" role="radio" aria-label="${p.name} palette" title="${p.name}"
+      style="--sw:linear-gradient(90deg, ${p.colors.map((c, i, a) => `${c} ${i / a.length * 100}% ${(i + 1) / a.length * 100}%`).join(', ')})"></button>`).join('');
+  const accentName = () => { $('#accent-name').textContent = TINTS[state.accent]?.name ?? (PALETTES[state.accent] ? `${PALETTES[state.accent].name} palette` : ''); };
+  const markAccent = () => $$('#seg-accent button, #seg-palette button').forEach((b) => {
+    b.classList.toggle('on', b.dataset.v === state.accent);
+    b.setAttribute('aria-checked', b.dataset.v === state.accent);
+  });
+  accentName();
+  const pickAccent = () => { accentName(); applyAccent(); markAccent(); refreshWidgetPlace(true); };
+  seg('#seg-accent', 'accent', pickAccent);
+  seg('#seg-palette', 'accent', pickAccent);
+  markAccent();
 
   renderOrder();
   $('#order-list').addEventListener('click', (e) => {
@@ -732,7 +823,20 @@ async function boot() {
   if (state.dailyMode !== 'conditions') set('dailyMode', 'conditions');
 
   applyTextScale();
+  applyAccent();
   trackViewport();
+  /* The charts are sized to the card width when painted. On iPad, rotating or
+     resizing in Split View changes that width (and the number of card
+     columns), so repaint once the size settles. */
+  let lastW = window.innerWidth, rz = 0;
+  window.addEventListener('resize', () => {
+    clearTimeout(rz);
+    rz = setTimeout(() => {
+      if (Math.abs(window.innerWidth - lastW) < 40) return;
+      lastW = window.innerWidth;
+      if (current) paint(current, activePlace());
+    }, 250);
+  });
   // iOS re-resolves system fonts when Text Size changes; re-measure on return
   document.addEventListener('visibilitychange', () => { if (!document.hidden) applyTextScale(); });
 

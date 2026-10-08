@@ -8,6 +8,7 @@
 
 import { state } from './store.js';
 import { toF } from './render.js';
+import { accentFor } from './icons.js';
 
 const cap = () => (typeof window !== 'undefined' ? window.Capacitor : null);
 
@@ -65,6 +66,11 @@ export function widgetPayload(data, place) {
       pop: round(d.pop),
     })),
     alert: data.alerts?.[0]?.title ?? null,
+    // [light, dark] ink as 0xRRGGBB; absent for 'sky', where the widget keeps its own
+    accent: (() => {
+      const a = accentFor(state.accent, data.current?.condition, data.current?.night);
+      return a ? [a.light, a.dark].map((h) => parseInt(h.slice(1), 16)) : null;
+    })(),
   };
 }
 
@@ -82,7 +88,7 @@ let lastKey = null;
 
 export function publishWidget(data, place, { force = false } = {}) {
   if (!isNative()) return;
-  const key = `${place?.id}|${state.unit}|${data.updated instanceof Date ? data.updated.getTime() : data.updated}`;
+  const key = `${place?.id}|${state.unit}|${state.accent}|${data.updated instanceof Date ? data.updated.getTime() : data.updated}`;
   if (!force && key === lastKey) return;
   lastKey = key;
   const debug = state.radarDebug === 'on';

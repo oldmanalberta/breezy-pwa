@@ -37,6 +37,7 @@ struct Forecast: Codable {
     var hourly: [Hour]
     var daily: [Day]
     var alert: String?
+    var accent: [UInt32]?
 
     static let appGroup = "group.ca.oldmanalberta.breezy"
     static let key = "forecast"

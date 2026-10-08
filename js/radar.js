@@ -11,8 +11,9 @@
  */
 
 import { state, set } from './store.js';
-import { hasWebGL2, createFlowRenderer } from './flow.js';
+import { hasWebGL2, createFlowRenderer, loadLegendPalette } from './flow.js';
 import { createWindLayer, fetchWindGrid } from './wind.js';
+import { fetchAurora, auroraCached, sampleOvation, auroraColour } from './aurora.js';
 
 const GEOMET = 'https://geo.weather.gc.ca/geomet';
 const RAIN = 'RADAR_1KM_RRAI';
@@ -37,6 +38,9 @@ export const LAYERS = {
     legendTitle: 'Rain',
     unit: 'mm/h',
     animated: true,
+    /* Drawn with discrete legend ramps, so smooth motion can read each scan
+       back as precipitation levels and build its in-betweens from those. */
+    ramps: [RAIN, SNOW],
     icon: '<svg viewBox="0 0 24 24"><path d="M12 2.7s6 6.9 6 11a6 6 0 0 1-12 0c0-4.1 6-11 6-11z"/></svg>',
   },
   smoke: {
@@ -89,6 +93,24 @@ export const WIND_ICON =
 export const SMOOTH_ICON =
   '<svg viewBox="0 0 24 24"><path d="M4 17c3-6 5-6 8 0s5 6 8 0" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><circle cx="20" cy="17" r="2.2"/><path d="M4 7h4M10 7h3M15 7h2" stroke="currentColor" stroke-width="2" stroke-linecap="round" opacity=".55"/></svg>';
 
+/* A tiny name curved around the bottom inside edge of a round overlay button,
+   because three of the four icons mean nothing on first sight. The arc runs
+   left to right through the bottom on the button's own radius, so the letters
+   stand with their tops toward the centre. Long names get a smaller size so
+   they stay on the lower half rather than climbing the sides. */
+export function ringLabel(id, text) {
+  const size = text.length > 8 ? 4.7 : 5.6;
+  return `<svg class="rd-ring" viewBox="0 0 48 48" aria-hidden="true">` +
+    `<defs><path id="rd-ring-${id}" d="M4.6 24a19.4 19.4 0 0 0 38.8 0"/></defs>` +
+    `<text font-size="${size}"><textPath href="#rd-ring-${id}" startOffset="50%" ` +
+    `text-anchor="middle">${text}</textPath></text></svg>`;
+}
+
+/* Aurora, like wind, rides on top of whichever data layer is showing: it is
+   NOAA's 30–90 minute OVATION forecast, painted from the global grid. */
+export const AURORA_ICON =
+  '<svg viewBox="0 0 24 24"><path d="M3 19c1.6-6.5 3.2-9.5 5.2-9.5s2.4 5.2 3.8 5.2 2.6-9.7 5.2-9.7c1.7 0 3 3 3.8 5.6l-1.9.6c-.7-2.2-1.4-4.2-1.9-4.2-1.3 0-2 9.7-5.2 9.7S9.6 11.5 8.2 11.5c-.9 0-2.2 2.6-3.3 8z"/></svg>';
+
 export const windLabel = (m) =>
   m === 'particles' ? 'Wind on' : m === 'full' ? 'Wind + speed shading' : 'Wind off';
 
@@ -101,6 +123,11 @@ const MIN_Z = 3, MAX_Z = 11;
 /* Nine scans is ~54 minutes of history. Twelve pushed the open-to-ready time to
    roughly nine seconds, since every extra frame costs two WMS renders. */
 const FRAMES = 9;
+
+/* The fastest precipitation plausibly travels — a fast squall line or a
+   jet-driven snow band. Smooth motion never moves echo further than this
+   between two scans, whatever the view's zoom. */
+const MAX_STORM_KMH = 130;
 
 /* The composite covers North America; hide the feature elsewhere. */
 export const radarAvailable = (lat, lon) =>
@@ -144,6 +171,23 @@ function wmsUrl(layer, bbox, w, h, time, scale = 1, style = null) {
 export const legendUrl = (layer = RAIN, style = null) =>
   `${GEOMET}?service=WMS&version=1.3.0&request=GetLegendGraphic&layer=${layer}` +
   `&format=image/png&sld_version=1.1.0${style ? `&style=${encodeURIComponent(style)}` : ''}`;
+
+/* Legend ramps, fetched once per session. Kept even if one fails, as null,
+   so smooth motion degrades to blending colours rather than not drawing. */
+const rampCache = new Map();
+function legendRamps(layer) {
+  if (!layer.ramps) return Promise.resolve(null);
+  return Promise.all(layer.ramps.map((name) => {
+    if (!rampCache.has(name)) {
+      rampCache.set(name, loadLegendPalette(legendUrl(name)).catch((e) => {
+        rampCache.delete(name);                 // try again next time
+        console.warn('legend palette unavailable', name, e);
+        return null;
+      }));
+    }
+    return rampCache.get(name);
+  }));
+}
 
 /* ── base maps ────────────────────────────────────────
    Plain light/dark tiles are clean but nearly featureless under radar, so the
@@ -260,14 +304,17 @@ export async function fetchFrameTimes(limit = 12, layerName = RAIN, mode = 'past
 }
 
 /* ── the map ──────────────────────────────────────── */
-export function createRadar(host, { lat, lon, tz }) {
+export function createRadar(host, { lat, lon, tz, focus = null }) {
   /* Always open on precipitation. The layer choice persists while the panel is
      up so switching back and forth is cheap, but carrying it across sessions
      meant a glance at smoke last week decided what you saw when you opened the
      radar to check for rain. Precipitation is what the panel is for. */
   if (state.radarLayer !== 'precip') set('radarLayer', 'precip');
 
-  let z = 7;
+  /* Opened from the aurora card: show the forecast, zoomed out far enough to
+     see the oval rather than the few towns around you. */
+  if (focus === 'aurora') set('auroraMap', 'on');
+  let z = focus === 'aurora' ? 4 : 7;
   let cx = lonToWorld(lon, z), cy = latToWorld(lat, z);   // centre, world px
   let W = 0, H = 0;
   let frames = [], idx = 0, playing = false, timer = null, loadedFor = null, ready = false;
@@ -305,6 +352,7 @@ export function createRadar(host, { lat, lon, tz }) {
     <div class="rd-map" id="rd-map">
       <div class="rd-tiles"></div>
       <div class="rd-frames"></div>
+      <canvas class="rd-aurora" id="rd-aurora" hidden></canvas>
       <!-- wind rides above the data overlay and outlives its reloads -->
       <canvas class="rd-wind-speed" id="rd-wind-speed" hidden></canvas>
       <canvas class="rd-wind" id="rd-wind" hidden></canvas>
@@ -324,26 +372,31 @@ export function createRadar(host, { lat, lon, tz }) {
       <button class="icon-btn" data-rd="close" aria-label="Close radar">
         <svg viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
       </button>
-      <div class="rd-title"><b>Radar</b><span id="rd-stamp">Loading…</span></div>
-    </div>
-    <div class="rd-zoom">
-      <button data-rd="in" aria-label="Zoom in">+</button>
-      <button data-rd="out" aria-label="Zoom out">&minus;</button>
+      <div class="rd-title"><b>Radar</b></div>
     </div>
     <div class="rd-layers" id="rd-layers">
       ${Object.entries(LAYERS).map(([k, l]) =>
         `<button class="rd-layer${k === state.radarLayer ? ' on' : ''}" data-layer="${k}"
-           aria-label="${l.label}" title="${l.label}">${l.icon}</button>`).join('')}
+           aria-label="${l.label}" title="${l.label}">${l.icon}${ringLabel(k, l.label.toUpperCase())}</button>`).join('')}
       <button class="rd-layer rd-windbtn" id="rd-windbtn" data-rd="wind"
-        aria-label="Wind overlay">${WIND_ICON}<i class="rd-winddot"></i></button>
+        aria-label="Wind overlay">${WIND_ICON}${ringLabel('wind', 'WIND')}<i class="rd-winddot"></i></button>
+      <button class="rd-layer rd-aurorabtn" id="rd-aurorabtn" data-rd="aurora"
+        aria-label="Aurora forecast">${AURORA_ICON}${ringLabel('aurora', 'AURORA')}</button>
       <button class="rd-layer rd-smoothbtn" id="rd-smoothbtn" data-rd="smooth"
-        aria-label="Smooth motion">${SMOOTH_ICON}</button>
+        aria-label="Smooth motion">${SMOOTH_ICON}${ringLabel('smooth', 'SMOOTH')}</button>
     </div>
     <div class="rd-bottom">
+      <!-- zoom rides on top of the bottom panel, just over the scan time -->
+      <div class="rd-zoom">
+        <button data-rd="in" aria-label="Zoom in">+</button>
+        <button data-rd="out" aria-label="Zoom out">&minus;</button>
+      </div>
       <div class="rd-loading" id="rd-loading" hidden>
         <span class="rd-loadtext">Loading radar…</span>
         <span class="rd-loadbar"><i class="rd-loadfill"></i></span>
       </div>
+      <!-- the scan time sits over the slider, where your eye is while it plays -->
+      <div class="rd-stamp" id="rd-stamp">Loading…</div>
       <div class="rd-controls">
         <button class="rd-play" data-rd="play" aria-label="Play animation">
           <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
@@ -789,10 +842,17 @@ export function createRadar(host, { lat, lon, tz }) {
       try {
         updateLoading(0, 1, 'Tracking motion');
         flowR.setOpacity(layer.opacity ?? 0.9);
+        const ramps = await legendRamps(layer);
+        // how far echo can travel between each pair of scans, as a share of the view
+        const viewM = W * 156543.03392 * Math.cos((worldToLat(cy, z) * Math.PI) / 180) / 2 ** z;
+        const maxShifts = frames.slice(1).map((t, i) =>
+          (MAX_STORM_KMH * 1000 * Math.max(6, (t - frames[i]) / 60000)) / 60 / viewM);
         const committed = await flowR.build(
           composites,
           (p) => updateLoading(p, 1, 'Tracking motion'),
           () => loadedFor !== myKey,
+          ramps,
+          maxShifts,
         );
         /* The frames now live on the GPU; the canvases they came from are
            dead weight. iOS keeps a hard budget on canvas backing store and,
@@ -816,7 +876,8 @@ export function createRadar(host, { lat, lon, tz }) {
            every opening, and looked exactly like the setting doing nothing. */
         const richest = composites.reduce((b, c, i) => (c.echoPct > composites[b].echoPct ? i : b), 0);
         const drawn = composites[richest].echoPct > 1 ? flowR.probe(richest) : -1;
-        dbg(`${layer.label}: GPU build ok, ${flowR.frameCount} frames, probe ${drawn}`);
+        // one toast: a second one straight after replaced this and was never seen
+        dbg(`${layer.label}: GPU build ok, ${flowR.frameCount} frames, probe ${drawn} · ${flowR.report}`);
         if (drawn === 0) {
           console.warn('WebGL radar produced an empty frame; using images instead');
           say('Smooth motion drew nothing on this device — showing standard frames');
@@ -1042,6 +1103,78 @@ export function createRadar(host, { lat, lon, tz }) {
     windLayer.start();
   }
 
+  /* ── aurora overlay ──
+     Drawn once per settled view at a quarter of the screen's resolution and
+     scaled up: the grid is 1°, so finer pixels would only show its blockiness.
+     The canvas shares the frames' pan and pinch transform. */
+  const auroraCanvas = host.querySelector('#rd-aurora');
+
+  /* Two passes of a 3×3 box blur on the quarter-size image: the 1° grid's
+     steps melt into a glow without leaning on a CSS filter. */
+  function blurRGBA(d, w, h) {
+    const tmp = new Uint8ClampedArray(d.length);
+    for (let pass = 0; pass < 2; pass++) {
+      for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+        const s = [0, 0, 0, 0]; let n = 0;
+        for (let dy = -1; dy <= 1; dy++) {
+          const yy = y + dy; if (yy < 0 || yy >= h) continue;
+          for (let dx = -1; dx <= 1; dx++) {
+            const xx = x + dx; if (xx < 0 || xx >= w) continue;
+            const k = (yy * w + xx) * 4, a = d[k + 3];
+            // weight colour by alpha so transparent black does not darken the edge
+            s[0] += d[k] * a; s[1] += d[k + 1] * a; s[2] += d[k + 2] * a; s[3] += a; n++;
+          }
+        }
+        const k = (y * w + x) * 4;
+        tmp[k] = s[3] ? s[0] / s[3] : 0; tmp[k + 1] = s[3] ? s[1] / s[3] : 0;
+        tmp[k + 2] = s[3] ? s[2] / s[3] : 0; tmp[k + 3] = s[3] / n;
+      }
+      d.set(tmp);
+    }
+  }
+
+  function paintAuroraButton() {
+    const btn = host.querySelector('#rd-aurorabtn');
+    btn?.classList.toggle('on', state.auroraMap === 'on');
+  }
+
+  function toggleAurora() {
+    set('auroraMap', state.auroraMap === 'on' ? 'off' : 'on');
+    paintAuroraButton();
+    updateAttrib();
+    say(state.auroraMap === 'on' ? 'Aurora forecast on · NOAA, next 30–90 minutes' : 'Aurora forecast off');
+    applyAurora();
+  }
+
+  async function applyAurora() {
+    if (state.auroraMap !== 'on') { auroraCanvas.hidden = true; return; }
+    let a = auroraCached();
+    try { a = await fetchAurora(); } catch (e) {
+      if (!a) { say('Aurora forecast unavailable right now'); auroraCanvas.hidden = true; return; }
+    }
+    if (state.auroraMap !== 'on' || !a?.ovation) { auroraCanvas.hidden = true; return; }
+    const s = 4, w = Math.ceil(W / s), h = Math.ceil(H / s);
+    auroraCanvas.width = w; auroraCanvas.height = h;
+    const ctx = auroraCanvas.getContext('2d');
+    const img = ctx.createImageData(w, h);
+    const left = cx - W / 2, top = cy - H / 2;
+    const lons = Array.from({ length: w }, (_, i) => worldToLon(left + (i + 0.5) * s, z));
+    for (let j = 0; j < h; j++) {
+      const la = worldToLat(top + (j + 0.5) * s, z);
+      if (Math.abs(la) < 30) continue;          // OVATION is empty this far from the poles
+      for (let i = 0; i < w; i++) {
+        const c = auroraColour(sampleOvation(a.ovation, la, lons[i]));
+        if (!c) continue;
+        const k = (j * w + i) * 4;
+        img.data[k] = c[0]; img.data[k + 1] = c[1]; img.data[k + 2] = c[2]; img.data[k + 3] = c[3];
+      }
+    }
+    blurRGBA(img.data, w, h);
+    ctx.putImageData(img, 0, 0);
+    auroraCanvas.hidden = false;
+    auroraCanvas.style.visibility = '';
+  }
+
   function setBasemap(key) {
     set('mapTheme', key);
     host.querySelectorAll('[data-map]').forEach((b) =>
@@ -1056,7 +1189,8 @@ export function createRadar(host, { lat, lon, tz }) {
 
   function updateAttrib() {
     const el = host.querySelector('#rd-attrib');
-    if (el) el.innerHTML = `Radar © Environment and Climate Change Canada · ${currentBasemap().attrib}`;
+    if (el) el.innerHTML = `Radar © Environment and Climate Change Canada${
+      state.auroraMap === 'on' ? ' · Aurora: NOAA SWPC' : ''} · ${currentBasemap().attrib}`;
   }
 
   function render() { drawTiles(); drawFrames(); }
@@ -1068,6 +1202,7 @@ export function createRadar(host, { lat, lon, tz }) {
     loadedFor = null;
     render();
     placePin();
+    applyAurora();
   }
 
   function placePin() {
@@ -1087,6 +1222,7 @@ export function createRadar(host, { lat, lon, tz }) {
     cx = gx * f - ax + W / 2;
     cy = gy * f - ay + H / 2;
     z = nz;
+    auroraCanvas.style.visibility = 'hidden';   // drawn for the old zoom until the view settles
     tileLayer.innerHTML = '';
     loadedFor = null;
     render();
@@ -1104,7 +1240,7 @@ export function createRadar(host, { lat, lon, tz }) {
 
   const deferFrames = () => {
     clearTimeout(settle);
-    settle = setTimeout(() => { drawFrames(); showFrame(idx); applyWind(); }, 220);
+    settle = setTimeout(() => { drawFrames(); showFrame(idx); applyWind(); applyAurora(); }, 220);
   };
 
   const setPan = (dx, dy) => {
@@ -1233,6 +1369,7 @@ export function createRadar(host, { lat, lon, tz }) {
       host.querySelector('#rd-empty').hidden = true;
     }
     if (act === 'wind') { cycleWind(); paintLegend(currentLayer()); return; }
+    if (act === 'aurora') { toggleAurora(); return; }
     if (act === 'smooth') {
       const next = useFlow ? 'images' : 'flow';
       setRenderer(next);
@@ -1302,6 +1439,8 @@ export function createRadar(host, { lat, lon, tz }) {
     playBtn.hidden = !l.animated;
     slider.hidden = !l.animated;
     paintWindButton();
+    paintAuroraButton();
+    applyAurora();
     // the saved preference goes through the same switch as the button
     setRenderer(state.radarRender === 'flow' ? 'flow' : 'images');
     await loadLayerTimes();
