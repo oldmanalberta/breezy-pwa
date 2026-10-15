@@ -284,7 +284,8 @@ function barChart(days, mode, W) {
 
 export function dailyCard(data, modeKey = 'conditions') {
   measure();
-  const ahead = (data.daily ?? []).slice(0, 10);
+  const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+  const ahead = (data.daily ?? []).filter((d) => !d.date || d.date >= todayStart).slice(0, 10);
   if (!ahead.length) return '';
 
   const available = Object.entries(DAILY_MODES).filter(([, m]) => hasData(m, ahead));
@@ -994,10 +995,14 @@ export function historyCard(data, opts = {}) {
     `<button class="dp-pill${y === pick ? ' on' : ''}" data-history-years="${y}">${
       y === 1 ? 'Last year' : `${y} years`}</button>`).join('');
 
+  /* Switching the span keeps the last year on screen, dimmed, until the new
+     one arrives, so the card holds its size instead of collapsing to a
+     "Loading…" line and growing back. */
+  const loading = !!h && h.yearsAgo !== pick;
   const shell = (body) => card('Historical', G.hist, `
-    <div class="dp-pills">${pills}</div>${body}`);
+    <div class="dp-pills">${pills}</div><div class="hist-body${loading ? ' is-loading' : ''}">${body}</div>`);
 
-  if (!h || h.yearsAgo !== pick) return shell('<p class="dp-summary">Loading…</p>');
+  if (!h) return shell('<p class="dp-summary">Loading…</p>');
   if (!h.days.length) return shell('<p class="dp-summary">No records for this period.</p>');
 
   const days = h.days;
@@ -1182,5 +1187,6 @@ export function renderCards(data, opts = {}) {
     try { return fn(data, opts) ?? ''; }
     catch (e) { console.warn('card failed', e); return ''; }
   };
-  return order.map((k) => safe(CARDS[k].fn)).join('');
+  // each card carries its key so a repaint can match it to the one on screen
+  return order.map((k) => safe(CARDS[k].fn).replace('<section class="card', `<section data-card="${k}" class="card`)).join('');
 }

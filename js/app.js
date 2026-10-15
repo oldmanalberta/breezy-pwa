@@ -100,7 +100,7 @@ function paintHeadsUp(data) {
   if (!el) return;
   let lines = [];
   try { lines = headsUp(data); } catch (e) { console.warn('heads-up failed', e); }
-  el.innerHTML = lines.map((t, i) => `<span class="${i ? 'hq-2' : 'hq-1'}">${t.replace(/[&<>]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[ch])}</span>`).join('');
+  fadeSet(el, lines.map((t, i) => `<span class="${i ? 'hq-2' : 'hq-1'}">${t.replace(/[&<>]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[ch])}</span>`).join(''), true);
   el.hidden = !lines.length;
 }
 
@@ -143,6 +143,99 @@ function parkDailyScroll() {
    which can call back here, and one wrong condition in that chain wedges the
    main thread rather than throwing anything you could see. */
 let repainting = false;
+/* ── gentle updates ───────────────────────────────── */
+/* New data used to replace the whole deck in one frame: cards vanished and
+   came back, and a card that was loading collapsed and regrew. Now each card
+   is matched to the one already on screen by its key. Unchanged cards are
+   left exactly as they are; changed ones keep their place while the old
+   contents fade out over the new ones fading in, and the card eases to its
+   new height. Returns the keys of the cards that were redrawn. */
+function morphCards(box, html) {
+  const tpl = document.createElement('template');
+  tpl.innerHTML = html;
+  const next = [...tpl.content.children];
+  next.forEach((n) => { n.__src = n.innerHTML; });
+  const old = new Map([...box.children].filter((e) => e.dataset.card).map((e) => [e.dataset.card, e]));
+  const changed = new Set();
+
+  if (!old.size) {                         // first paint, or replacing a skeleton or an error
+    next.forEach((n) => { n.classList.add('xf-in'); changed.add(n.dataset.card); });
+    box.replaceChildren(...next);
+    return changed;
+  }
+  const out = next.map((n) => {
+    const k = n.dataset.card, o = old.get(k);
+    if (!o) { n.classList.add('xf-in'); changed.add(k); return n; }
+    old.delete(k);
+    if (o.__src === n.__src) return o;     // nothing new: leave it alone
+    crossfade(o, n);
+    changed.add(k);
+    return o;
+  });
+  /* Put each card in its place without lifting the ones already there.
+     replaceChildren() detached and re-inserted every card, and a strip that
+     leaves the document comes back scrolled to zero: the daily panel parked
+     on today, then the history repaint a few seconds later moved it back to
+     last week even though the card itself had not changed. */
+  old.forEach((e) => e.remove());           // cards no longer wanted simply drop out
+  out.forEach((n, i) => {
+    const at = box.children[i] ?? null;
+    if (at === n) return;
+    const keep = scrollers(n).map((e) => e.scrollLeft);
+    box.insertBefore(n, at);
+    scrollers(n).forEach((e, k) => { e.scrollLeft = keep[k] ?? 0; });
+  });
+  return changed;
+}
+
+const scrollers = (root) => [...root.querySelectorAll('.hourly-wrap, .dp-scroll, .dp-pills')];
+
+function crossfade(o, n) {
+  o.querySelectorAll(':scope > .xf-old').forEach((g) => g.remove());   // a fade still running
+  const h0 = o.offsetHeight;
+  const was = scrollers(o).map((e) => e.scrollLeft);
+
+  // the old contents move into an overlay that fades out on top
+  const ghost = document.createElement('div');
+  ghost.className = 'xf-old';
+  ghost.setAttribute('aria-hidden', 'true');
+  ghost.append(...o.childNodes);
+
+  o.className = n.className;
+  o.replaceChildren(...n.childNodes);
+  o.__src = n.__src;
+  o.append(ghost);
+  // moving nodes resets their scroll; put both old and new strips where they were
+  scrollers(ghost).forEach((e, i) => { e.scrollLeft = was[i] ?? 0; });
+  scrollers(o).filter((e) => !ghost.contains(e)).forEach((e, i) => { e.scrollLeft = was[i] ?? 0; });
+
+  o.classList.add('xf-swap');
+  const h1 = o.offsetHeight;
+  if (Math.abs(h1 - h0) > 2) {
+    o.style.height = `${h0}px`;
+    void o.offsetHeight;
+    o.style.transition = 'height 380ms var(--ease)';
+    o.style.height = `${h1}px`;
+  }
+  clearTimeout(o.__xf);
+  o.__xf = setTimeout(() => {
+    ghost.remove();
+    o.classList.remove('xf-swap');
+    o.style.height = ''; o.style.transition = '';
+  }, 600);
+}
+
+/* Text and icons in the hero: swap the value and let it fade up, rather
+   than snapping, but only when it actually changed. */
+function fadeSet(el, value, html = false) {
+  if (!el) return;
+  if (html ? el.innerHTML === value : el.textContent === value) return;
+  if (html) el.innerHTML = value; else el.textContent = value;
+  el.classList.remove('xf-pop');
+  void el.offsetWidth;
+  el.classList.add('xf-pop');
+}
+
 function repaintCard() {
   if (!current || repainting) return;
   repainting = true;
@@ -329,13 +422,13 @@ function paint(data, place, stale = false) {
   if (stale) bits.push(`Offline · ${timeLabel(issued, place.tz)}`);
   else if (checked && issued && checked - issued > 5 * 60e3) bits.push(`Checked ${timeLabel(checked, place.tz)} · ${data.source?.short ?? 'data'} from ${timeLabel(issued, place.tz)}`);
   else bits.push(`Updated ${timeLabel(checked ?? issued, place.tz)}`);
-  $('#place-sub').textContent = bits.join(' · ');
+  fadeSet($('#place-sub'), bits.join(' · '));
 
   renderDots();
   paintAlertBanner(data);
-  $('#hero-icon').innerHTML = icon(c.condition, c.night);
-  $('#hero-temp').innerHTML = `${temp(c.temp, false)}<span class="deg">°</span>`;
-  $('#hero-cond').textContent = c.text || '—';
+  fadeSet($('#hero-icon'), icon(c.condition, c.night), true);
+  fadeSet($('#hero-temp'), `${temp(c.temp, false)}<span class="deg">°</span>`, true);
+  fadeSet($('#hero-cond'), c.text || '—');
 
   /* Assemble only the parts that exist. Opened in the evening, ECCC's first
      forecast block is "Tonight", which carries a low but no daytime high —
@@ -345,20 +438,22 @@ function paint(data, place, stale = false) {
   if (d0?.hi != null) range.push(`H ${temp(d0.hi)}`);
   if (d0?.lo != null) range.push(`L ${temp(d0.lo)}`);
   if (c.feelsLike != null) range.push(`${c.feelsLabel} ${temp(c.feelsLike)}`);
-  $('#hero-range').textContent = range.join('  ·  ');
+  fadeSet($('#hero-range'), range.join('  ·  '));
 
   data.tz = place.tz;
   data.coords = { lat: place.lat, lon: place.lon };
   data.aurora = auroraCached();
-  $('#cards').innerHTML = renderCards(data, {
+  const changed = morphCards($('#cards'), renderCards(data, {
     dailyMode: state.dailyMode,
     historyYears: state.historyYears,
     order: state.order ?? DEFAULT_ORDER,
-  });
+  }));
   loadHistory(place);
   loadAurora();
-  parkDailyScroll();
-  centreHistoryScroll();
+  // only re-park the strips that were actually redrawn, so a refresh that
+  // leaves a card alone doesn't snap it back while you're looking at it
+  if (changed.has('daily')) { parkDailyScroll(); requestAnimationFrame(parkDailyScroll); }
+  if (changed.has('history')) centreHistoryScroll();
 
   const srcBits = [data.source.name];
   if (data.supplement) srcBits.push(`+ ${data.supplement}`);
@@ -618,7 +713,9 @@ function wire() {
     if (hy) {
       set('historyYears', Number(hy.dataset.historyYears));
       const p = activePlace();
-      if (current) { current.history = histCache.get(`${p?.id}|${state.historyYears}`) ?? null; }
+      // keep showing the current span (dimmed) until the new one loads
+      const hit = histCache.get(`${p?.id}|${state.historyYears}`);
+      if (current && hit) current.history = hit;
       repaintCard();
       loadHistory(p);
       return;

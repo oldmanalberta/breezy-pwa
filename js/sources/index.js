@@ -23,6 +23,18 @@ export const SOURCES = {
  *
  * ECCC's own values always win where it has them — this only fills holes.
  */
+/* ECCC's forecast runs about a week from its issue; once the stale days are
+   dropped it can come up short, so top the list up with Open-Meteo's days
+   that follow ECCC's last one. */
+function fillDailyTail(data, om) {
+  if (!Array.isArray(data.daily) || !Array.isArray(om)) return;
+  const last = data.daily.reduce((a, d) => (d.date && (!a || d.date > a) ? d.date : a), null);
+  const have = new Set(data.daily.map((d) => d.date?.toDateString()));
+  const extra = om.filter((d) => d.date && !have.has(d.date.toDateString()) && (!last || d.date > last));
+  const need = Math.max(0, 7 - data.daily.length);
+  if (need) data.daily.push(...extra.slice(0, need).map((d) => ({ ...d, label: null })));
+}
+
 function mergeDailyExtras(eccc, om) {
   if (!Array.isArray(eccc) || !Array.isArray(om)) return;
   const byDate = new Map(om.filter((d) => d.date).map((d) => [d.date.toDateString(), d]));
@@ -91,6 +103,7 @@ export async function loadWeather(loc, pref = 'auto') {
              and US AQI is the number most other apps report. */
           if (om.air?.index != null) data.airUs = om.air;
           mergeDailyExtras(data.daily, om.daily);
+          fillDailyTail(data, om.daily);
           // ECCC has no "what happened last week" feed at all
           data.past = om.past;
           data.supplement = 'Open-Meteo';

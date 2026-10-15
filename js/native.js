@@ -38,7 +38,12 @@ export function widgetPayload(data, place) {
   return {
     v: 1,
     updated: iso(data.updated) ?? new Date().toISOString(),
+    // when the app wrote this; the widget refreshes on its own from lat/lon
+    // once this is half an hour old
+    published: new Date().toISOString(),
     place: place?.name ?? '',
+    lat: place?.lat ?? data.coords?.lat ?? null,
+    lon: place?.lon ?? data.coords?.lon ?? null,
     unit: state.unit === 'F' ? '°F' : '°C',
     tz: place?.tz ?? data.tz ?? null,
     current: {
@@ -88,12 +93,16 @@ let lastKey = null;
 
 export function publishWidget(data, place, { force = false } = {}) {
   if (!isNative()) return;
-  const key = `${place?.id}|${state.unit}|${state.accent}|${data.updated instanceof Date ? data.updated.getTime() : data.updated}`;
-  if (!force && key === lastKey) return;
-  lastKey = key;
   const debug = state.radarDebug === 'on';
   try {
-    callNative('WidgetBridge', 'publish', { json: JSON.stringify(widgetPayload(data, place)) })
+    const payload = widgetPayload(data, place);
+    // ECCC's issue time can sit still for hours while the hours and days
+    // move on, so compare what the widget would actually show
+    const { published, ...content } = payload;
+    const key = JSON.stringify(content);
+    if (!force && key === lastKey) return;
+    lastKey = key;
+    callNative('WidgetBridge', 'publish', { json: JSON.stringify(payload) })
       .then((r) => {
         if (r?.stored === false) tell('Widget: App Group not available — check the App Groups capability');
         else if (debug) tell(`Widget updated · ${place?.name ?? ''}`);

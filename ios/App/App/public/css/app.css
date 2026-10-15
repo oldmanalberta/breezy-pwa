@@ -319,6 +319,7 @@ svg { width: 100%; height: 100%; fill: currentColor; display: block; }
 }
 
 .card {
+  position: relative;
   background: var(--surface);
   border-radius: var(--r-xl);
   padding: 18px;
@@ -1117,7 +1118,33 @@ svg { width: 100%; height: 100%; fill: currentColor; display: block; }
 .skel { animation: pulse 1.5s ease-in-out infinite; }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
 
+/* gentle updates: see morphCards() in app.js */
+@keyframes xfIn  { from { opacity: 0; } to { opacity: 1; } }
+@keyframes xfOut { from { opacity: 1; } to { opacity: 0; } }
+.card.xf-in { animation: xfIn 500ms var(--ease) both; }
+.card.xf-swap > :not(.xf-old):not(.card-head) { animation: xfIn 480ms var(--ease) 80ms both; }
+.xf-old {
+  position: absolute; left: 0; right: 0; top: 0;
+  padding: inherit; pointer-events: none;
+  animation: xfOut 320ms var(--ease) both;
+}
+.xf-old > .card-head { visibility: hidden; }   /* the heading stays put; only the contents fade */
+.xf-pop { animation: xfIn 600ms var(--ease) both; }
+.hist-body { transition: filter 300ms var(--ease); }
+/* filter rather than opacity, so it doesn't fight the cross-fade's opacity */
+.hist-body.is-loading { filter: opacity(.38); }
+
 @media (prefers-reduced-motion: reduce) {
+  /* Fades are what Apple suggests in place of motion, and iOS turns Reduce
+     Motion on more often than people realise, so the cross-fades and the sky
+     colour blend keep their timing; the blanket rule below still stops
+     everything that actually moves. */
+  .card.xf-in, .xf-pop { animation-duration: 500ms !important; }
+  .card.xf-swap > :not(.xf-old):not(.card-head) { animation-duration: 480ms !important; }
+  .xf-old { animation-duration: 320ms !important; }
+  .hist-body { transition-duration: 300ms !important; }
+  :root { transition-duration: 1.6s !important; }
+
   *, *::before, *::after { animation-duration: .001ms !important; transition-duration: .001ms !important; }
 }
 

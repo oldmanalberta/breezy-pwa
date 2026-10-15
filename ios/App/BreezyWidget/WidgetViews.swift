@@ -186,9 +186,9 @@ struct ForecastView: View {
         }
     }
 
-    private func dayName(_ d: Forecast.Day, first: Bool, tz: TimeZone) -> String {
-        if first { return "Today" }
-        let wd = Fmt.weekday(d.d, tz: tz)
+    private func dayName(_ d: Forecast.Day, in f: Forecast) -> String {
+        if f.isToday(d, at: entry.date) { return "Today" }
+        let wd = Fmt.weekday(d.d, tz: f.timeZone)
         return wd.isEmpty ? String((d.label ?? "").prefix(3)) : wd
     }
 
@@ -214,7 +214,7 @@ struct ForecastView: View {
     /// The whole week in the 2×4: current conditions on the head row, then
     /// seven tight columns with the high/low curve through them.
     private func medium(_ f: Forecast, _ t: Theme) -> some View {
-        let days = Array(f.daily.prefix(7))
+        let days = Array(f.days(from: entry.date).prefix(7))
         return VStack(alignment: .leading, spacing: 2) {
             HStack(alignment: .center, spacing: 6) {
                 CardHead(title: "\(days.count)-day forecast", symbol: "calendar", theme: t)
@@ -226,7 +226,7 @@ struct ForecastView: View {
             HStack(spacing: 0) {
                 ForEach(Array(days.enumerated()), id: \.offset) { i, d in
                     VStack(spacing: 1) {
-                        Text(dayName(d, first: i == 0, tz: f.timeZone)).font(Aileron.bold(11)).foregroundStyle(i == 0 ? t.accent : t.ink)
+                        Text(dayName(d, in: f)).font(Aileron.bold(11)).foregroundStyle(f.isToday(d, at: entry.date) ? t.accent : t.ink)
                         WxIcon(key: d.condition, size: 22)
                     }
                     .lineLimit(1).minimumScaleFactor(0.7)
@@ -248,7 +248,7 @@ struct ForecastView: View {
 
     /// The 4×4: the daily card, then the hourly strip beneath it.
     private func large(_ f: Forecast, _ t: Theme) -> some View {
-        let days = Array(f.daily.prefix(7))
+        let days = Array(f.days(from: entry.date).prefix(7))
         let hours = f.hours(from: entry.date, count: 6)
         return VStack(alignment: .leading, spacing: 3) {
             CardHead(title: "\(days.count)-day forecast", symbol: "calendar", theme: t)
@@ -257,7 +257,7 @@ struct ForecastView: View {
             HStack(spacing: 0) {
                 ForEach(Array(days.enumerated()), id: \.offset) { i, d in
                     VStack(spacing: 1) {
-                        Text(dayName(d, first: i == 0, tz: f.timeZone)).font(Aileron.bold(12)).foregroundStyle(i == 0 ? t.accent : t.ink)
+                        Text(dayName(d, in: f)).font(Aileron.bold(12)).foregroundStyle(f.isToday(d, at: entry.date) ? t.accent : t.ink)
                         Text(Fmt.monthDay(d.d, tz: f.timeZone)).font(Aileron.regular(9.5)).foregroundStyle(t.inkVar)
                         WxIcon(key: d.condition, size: 24)
                     }

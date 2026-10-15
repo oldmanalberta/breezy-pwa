@@ -9,9 +9,9 @@ struct BreezyEntry: TimelineEntry {
 }
 
 /// One provider serves every widget. The app republishes on each paint and
-/// asks WidgetKit to reload, so the data itself only changes then; the hourly
-/// entries exist so the "next hours" strip keeps rolling forward on its own
-/// between launches.
+/// asks WidgetKit to reload. Between launches the widget fetches its own
+/// copy from Open-Meteo once the data is half an hour old, so the week and
+/// the hours keep moving even if the app isn't opened for days.
 struct BreezyProvider: TimelineProvider {
     func placeholder(in context: Context) -> BreezyEntry {
         BreezyEntry(date: Date(), forecast: .sample)
@@ -22,17 +22,30 @@ struct BreezyProvider: TimelineProvider {
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<BreezyEntry>) -> Void) {
-        let forecast = Forecast.load()
+        let loaded = Forecast.load()
+        guard let saved = loaded, saved.lat != nil, saved.age > Forecast.staleAfter else {
+            completion(timeline(loaded))
+            return
+        }
+        Task {
+            let fresh = await saved.refreshed()
+            fresh?.save()
+            completion(timeline(fresh ?? saved))
+        }
+    }
+
+    /// Now, then the top of each of the next six hours so the strip rolls
+    /// forward; WidgetKit asks again in half an hour for fresher data.
+    private func timeline(_ forecast: Forecast?) -> Timeline<BreezyEntry> {
         let now = Date()
         let cal = Calendar.current
-        // this hour, then the top of each of the next six
         var entries = [BreezyEntry(date: now, forecast: forecast)]
         if let top = cal.dateInterval(of: .hour, for: now)?.end {
             for i in 0..<6 {
                 entries.append(BreezyEntry(date: top.addingTimeInterval(Double(i) * 3600), forecast: forecast))
             }
         }
-        completion(Timeline(entries: entries, policy: .atEnd))
+        return Timeline(entries: entries, policy: .after(now.addingTimeInterval(Forecast.staleAfter)))
     }
 }
 

@@ -138,14 +138,40 @@ function buildDaily(forecasts, issued, tz) {
     if (pop !== null) day.pop = Math.max(day.pop ?? 0, pop);
   }
 
-  // Attach real dates, counting forward from the issue day.
-  const start = issued ? new Date(issued) : new Date();
+  /* Attach real dates. Counting forward from the issue time went wrong two
+     ways: a feed that stalls carries yesterday's issue, so every date sat a
+     day behind; and the issue's calendar day was read in the phone's zone, not
+     the place's. Each period is named for its weekday, so anchor on that: the
+     first "Today"/"Tonight" is the issue day in the place's zone, and each
+     weekday name is the next date carrying it. Days already behind today are
+     dropped here; the daily merge fills the tail from Open-Meteo. */
+  const WD = [['sun', 'dim'], ['mon', 'lun'], ['tue', 'mar'], ['wed', 'mer'], ['thu', 'jeu'], ['fri', 'ven'], ['sat', 'sam']];
+  const wdOf = (name) => WD.findIndex((w) => w.some((x) => name.startsWith(x)));
+  let cur = calendarDay(issued ? new Date(issued) : new Date(), tz);
   days.forEach((d, i) => {
-    const dt = new Date(start);
-    dt.setDate(dt.getDate() + i);
-    d.date = dt;
+    const name = d.key.toLowerCase();
+    const wd = wdOf(name);
+    if (i === 0 && (wd < 0 || wd === cur.getDay())) { d.date = cur; return; }
+    let next = new Date(cur);
+    next.setDate(next.getDate() + 1);
+    if (wd >= 0) for (let k = 0; k < 6 && next.getDay() !== wd; k++) next.setDate(next.getDate() + 1);
+    cur = next;
+    d.date = cur;
   });
-  return days;
+  const today = calendarDay(new Date(), tz);
+  return days.filter((d) => d.date >= today);
+}
+
+/* The calendar day a moment falls on in the place's zone, as a Date at local
+   noon so that toDateString() comparisons elsewhere land on the same day. */
+function calendarDay(at, tz) {
+  let y, m, d;
+  try {
+    [y, m, d] = new Intl.DateTimeFormat('en-CA', { timeZone: tz || undefined }).format(at).split('-').map(Number);
+  } catch {
+    y = at.getFullYear(); m = at.getMonth() + 1; d = at.getDate();
+  }
+  return new Date(y, m - 1, d, 12);
 }
 
 /* ── alerts ── */
